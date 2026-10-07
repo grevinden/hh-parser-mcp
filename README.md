@@ -12,8 +12,8 @@
 ([`vacancy_app`](src/hh_mcp/app.py:168), [`employer_app`](src/hh_mcp/app.py:200))
 на базе Prefab (генеративный UI).
 
-Проект включает **dev-веб-приложение** (единый процесс: MCP-сервер + Starlette
-UI) — запуск одной командой, без внешних зависимостей для фронтенда.
+Запуск — нативный пускатель fastmcp из корня (`uv run fastmcp run` —
+MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузерный UI-превью).
 
 > Полное описание стека и конвенций — [`AGENTS.md`](AGENTS.md).
 
@@ -26,12 +26,11 @@ UI) — запуск одной командой, без внешних зави
 - **Fetch-пайплайн SOLID/DIP** — SSRF-защита, HTTP/2-транспорт (httpx2),
   HTML-санитайзер с NoisePolicy, разрешение ссылок, конвертация в Markdown
   (markitdown). Иерархия исключений — [`errors.py`](src/hh_mcp/fetch/errors.py).
-- **Три режима запуска** — stdio (для MCP-клиентов), HTTP (только MCP-сервер),
-  единый dev (MCP + веб-UI в одном процессе).
-- **Dev UI** — самодостаточная HTML-страница (без CDN) с отображением статуса,
-  списка инструментов, формы вызова и JSON-ответов.
-- **230 тестов** — `uv run pytest tests/ -v` (app, devapp, fetch-модуль,
-  guards, html, links, converter, orchestrator, transport, config, errors).
+- **Запуск — нативный пускатель fastmcp** (`uv run fastmcp run` / `uv run
+  fastmcp dev apps fastmcp.json`) из корня репозитория; транспорты stdio/http/sse.
+- **Dev UI** — браузерное превью UI-инструментов (`fastmcp dev apps`).
+- **341 тест** — `uv run pytest tests/ -v` (app, fetch-модуль, guards, html,
+  links, converter, orchestrator, transport, config, errors, enrich).
 
 ---
 
@@ -69,53 +68,47 @@ uv sync
 
 После `uv sync` становятся доступны:
 - все зависимости (`fastmcp[apps]`, `httpx2[http2]`, `markitdown`, `prefab-ui`,
-  `playwright`);
-- консольный скрипт `hh-mcp` (см. `[project.scripts]` в
-  [`pyproject.toml`](pyproject.toml:14)).
+  `playwright`).
 
 > **Важно**: `pip install` не используется. Добавление зависимостей — только
-> через `uv add <pkg>`.
+> через `uv add <pkg>`. Консольного скрипта `hh-mcp` нет и не создавать —
+> запуск только через `uv run fastmcp …`.
 
 ---
 
 ## Запуск
 
-### 1. Единый dev-режим (MCP-сервер + веб-UI)
+Запуск — **только через нативный пускатель fastmcp из корня репозитория**
+(конфиг `fastmcp.json` ищется автоматически в текущем каталоге).
+
+### 1. MCP-сервер (HTTP)
 
 ```bash
-# Через uv run
-uv run python -m hh_mcp --dev --mcp-port 8000 --dev-port 8080 --host 127.0.0.1
-
-# Или через консольный скрипт
-hh-mcp --dev --mcp-port 8000 --dev-port 8080 --host 127.0.0.1
-```
-
-Открываются два адреса:
-- **Dev UI**: [`http://127.0.0.1:8080`](http://127.0.0.1:8080) — самодостаточная
-  HTML-страница с формой вызова инструментов.
-- **MCP endpoint**: [`http://127.0.0.1:8000/mcp`](http://127.0.0.1:8000/mcp) —
-  streamable HTTP для MCP-клиентов.
-
-Остановка — `Ctrl+C` (SIGINT), оба сервера завершаются чисто, порты
-освобождаются.
-
-### 2. Только MCP-сервер (HTTP)
-
-```bash
-uv run python -m hh_mcp --transport http --host 127.0.0.1 --port 8000
-
-# Или
-hh-mcp --transport http --host 127.0.0.1 --port 8000
+uv run fastmcp run
 ```
 
 MCP-эндпоинт: `http://127.0.0.1:8000/mcp` (streamable HTTP).
+Переопределение транспорта: `uv run fastmcp run --transport stdio`.
+
+### 2. Dev-режим (MCP + браузерный UI-превью)
+
+```bash
+uv run fastmcp dev apps fastmcp.json
+```
+
+Открываются два адреса:
+- **Dev UI**: `http://127.0.0.1:8080/?token=…` — браузерное превью
+  UI-инструментов (открывается автоматически; без токена — 403).
+- **MCP endpoint**: `http://127.0.0.1:8000/mcp` — streamable HTTP для
+  MCP-клиентов.
+
+> У этой подкоманды `SERVER-SPEC` обязателен (`fastmcp dev apps --help` →
+> `[required]`) — в отличие от `fastmcp run`, конфиг здесь не авто-ищется.
 
 ### 3. STDIO (для MCP-клиентов)
 
 ```bash
-uv run python -m hh_mcp
-# Или
-hh-mcp
+uv run fastmcp run --transport stdio
 ```
 
 Используется для интеграции с MCP-клиентами, поддерживающими stdio-транспорт
@@ -125,76 +118,64 @@ hh-mcp
 {
   "mcpServers": {
     "hh-mcp": {
-      "command": "/path/to/hh-mcp/.venv/bin/hh-mcp",
-      "args": []
+      "command": "/path/to/hh-mcp/.venv/bin/uv",
+      "args": ["run", "fastmcp", "run", "--transport", "stdio"]
     }
   }
 }
 ```
 
-### CLI-флаги
+### Флаги запуска (`fastmcp run`)
 
 | Флаг | По умолчанию | Описание |
 |------|-------------|----------|
-| `--transport` | `stdio` | Транспорт (`stdio`, `http`, `sse`, `streamable-http`) |
+| `--transport` | из `fastmcp.json` (`http`) | Транспорт (`stdio`, `http`, `sse`, `streamable-http`) |
 | `--host` | `127.0.0.1` | Адрес привязки HTTP-сервера |
-| `--port` | `8000` | Порт MCP-сервера (HTTP / dev-режим) |
-| `--dev` | — (флаг) | Включить dev-режим (MCP + веб-фронтенд) |
-| `--mcp-port` | `8000` | Порт MCP-сервера в dev-режиме |
-| `--dev-port` | `8080` | Порт веб-фронтенда в dev-режиме |
+| `--port` | `8000` | Порт MCP-сервера |
+| `--path` | `/mcp` | Путь эндпоинта |
+
+Dev-режим — отдельная подкоманда `fastmcp dev apps fastmcp.json`
+(флаги `--mcp-port`, `--dev-port`, `--no-reload`).
 
 ---
 
 ## Dev UI
 
-Веб-приложение [`devapp.py`](src/hh_mcp/devapp.py) — Starlette ASGI,
-самодостаточная HTML-страница (без CDN, без внешних скриптов).
+Dev-режим — нативный (`uv run fastmcp dev apps fastmcp.json`): MCP-сервер
+на порту 8000 (`/mcp`) + браузерный UI превью на порту 8080 (токен-URL,
+открывается автоматически). Это интерфейс **для отладки** UI-инструментов
+(`vacancy_app` / `employer_app`); в нём же видна панель операций сервера
+(все вызовы `tools/call` с аргументами и JSON-ответами).
 
-**Страница `GET /`** отображает:
-- статус подключения к MCP-серверу (connected/disconnected);
-- версию протокола, имя сервера, количество инструментов;
-- список tools / resources / prompts;
-- форму вызова инструмента (поле name + JSON-редактор аргументов);
-- ответ инструмента в текстовом виде;
-- автообновление каждые 5 секунд.
+Прежний собственный dev-UI (`src/hh_mcp/devapp.py`, Starlette, страница
+`GET /` и REST `/api/*`) **удалён** — см. коммит `a30bcb9`.
 
-### REST API
+### Вызов инструментов без MCP-клиента (CLI-мост)
 
-| Метод | Путь | Описание | Ответ |
-|-------|------|----------|-------|
-| `GET` | `/api/status` | Статус подключения к MCP | `{"connected": true, "mcp_url": "…", "server": "hh-mcp", "protocol_version": "2026-07-28", "tool_count": 4}` |
-| `GET` | `/api/mcp` | Инструменты, ресурсы, промпты | `{"tools": [{…}], "resources": [{…}], "prompts": [{…}]}` |
-| `POST` | `/api/mcp/call` | Вызов инструмента | `{"isError": bool, "content": […], "structuredContent": …}` |
+REST-интерфейс `/api/*` существовал у `src/hh_mcp/devapp.py` и **удалён**
+вместе с ним (коммит `a30bcb9`, dev-режим стал нативным `fastmcp dev apps`).
+Сейчас у сервера нет REST API; единственная HTTP-точка — MCP JSON-RPC
+на `/mcp`.
 
-> **Контракт POST /api/mcp/call**: JSON-тело содержит поле **`tool`** (строка,
-> имя инструмента), **НЕ `name`**. Поле `arguments` — словарь параметров.
-
-#### Примеры curl
+Стандартный способ вызвать инструменты из шелла, скрипта или агента без
+MCP-клиента — клиентские команды fastmcp (`fastmcp list`, `fastmcp call`):
 
 ```bash
-# Статус
-curl http://127.0.0.1:8080/api/status
-
 # Список инструментов
-curl http://127.0.0.1:8080/api/mcp
+uv run fastmcp list http://127.0.0.1:8000/mcp
 
-# Вызов get_vacancy
-curl -X POST http://127.0.0.1:8080/api/mcp/call \
-  -H 'Content-Type: application/json' \
-  -d '{"tool":"get_vacancy","arguments":{"id":138156968}}'
+# Вызов get_vacancy (типы коэрсятся по схеме автоматически)
+uv run fastmcp call http://127.0.0.1:8000/mcp get_vacancy id=138156968
 
-# Вызов get_employer с невалидным ID (ожидается ошибка)
-curl -X POST http://127.0.0.1:8080/api/mcp/call \
-  -H 'Content-Type: application/json' \
-  -d '{"tool":"get_employer","arguments":{"id":0}}'
+# Вызов get_employer, JSON-вывод (content + structuredContent)
+uv run fastmcp call http://127.0.0.1:8000/mcp get_employer id=11620617 --json
 ```
 
-**Проверено (live)**:
-- `GET /api/status` → `{"connected": true, "mcp_url": "http://127.0.0.1:8000/mcp", "server": "hh-mcp", "protocol_version": "2026-07-28", "tool_count": 4}`
-- `GET /api/mcp` → 4 инструмента + 2 prefab-ресурса.
-- `POST /api/mcp/call` `{"tool": "get_employer", "arguments": {"id": 0}}` → `isError: true`, `content: [{"type":"text","text":"Invalid ID: 0"}]`
-- `POST /api/mcp/call` `{"tool": "get_vacancy", "arguments": {"id": 138156968}}` → `isError: false`, Markdown «# Вакансия…»
-- Прямой клиент → `http://127.0.0.1:8000/mcp`: initialize + list_tools OK.
+Более низкоуровневый вариант — прямой JSON-RPC запрос к `/mcp`
+(streamable HTTP, требуется рукопожатие initialize → `Mcp-Session-Id`).
+Направление «MCP → REST» из документации FastMCP реализуется только
+обёрткой в FastAPI (`FastMCP.from_fastapi` / `mcp.http_app`), см. gofastmcp.com
+/ integrations / fastapi.
 
 ---
 
@@ -234,9 +215,9 @@ http://127.0.0.1:8000/mcp
 uv run pytest tests/ -v
 ```
 
-**230 тестов**, все passed. Покрытие:
-- `test_mcp_app.py` — инструменты, валидация, error mapping;
-- `test_devapp.py` — API `/api/status`, `/api/mcp`, `/api/mcp/call`, FakeClient;
+**341 тестов**, все passed. Покрытие:
+- `test_mcp_app.py` — инструменты, валидация, error mapping, UI-entry;
+- `test_enrich.py` — обогащение employer-карточки;
 - `test_guards.py` — SSRF-защита (localhost, userinfo, схемы);
 - `test_html.py` — санитайзер, NoisePolicy;
 - `test_links.py` — разрешение относительных ссылок;
@@ -255,9 +236,7 @@ uv run pytest tests/ -v
 │                      hh-mcp                              │
 │  src/hh_mcp/                                             │
 │  ├── __init__.py         — версия пакета (0.1.0)         │
-│  ├── __main__.py         — CLI entry point (argparse)    │
 │  ├── app.py              — FastMCPApp + 4 инструмента   │
-│  ├── devapp.py           — dev-веб-приложение (Starlette)│
 │  └── fetch/              — fetch-пайплайн (SOLID)        │
 │      ├── __init__.py     — публичное API                 │
 │      ├── config.py       — RequestConfig / NoisePolicy   │
@@ -267,9 +246,13 @@ uv run pytest tests/ -v
 │      ├── html.py         — HTML-санитайзер               │
 │      ├── converter.py    — HTML → Markdown (markitdown)  │
 │      ├── links.py        — разрешение относительных ссылок│
+│      ├── enrich.py       — обогащение employer-карточки  │
 │      └── orchestrator.py — FetchService + fetch_as_markdown│
+├── server.py              — entry point пускателя (fastmcp)│
+├── fastmcp.json           — конфиг нативного запуска      │
 ├── docs/                  — проектные документы           │
-│   ├── plan_mcp_app.md    — архитектурный план            │
+│   ├── apps_mode.md       — режим приложений (рус.)       │
+│   ├── plan_mcp_app.md    — архитектурный план (рус.)     │
 │   └── fetch_redesign.md  — SOLID-спецификация fetch     │
 ├── pyproject.toml         — метаданные, зависимости       │
 └── AGENTS.md              — конвенции для агентов         │
@@ -291,36 +274,32 @@ links.py (resolve_relative_links) → converter.py (MarkItDown)
 ToolResult → MCP Client
 ```
 
-### Dev-режим (два ASGI-приложения в одном процессе)
+### Dev-режим (нативный `fastmcp dev apps fastmcp.json`)
+
+Один процесс пускателя поднимает два слушателя:
 
 ```
 MCP-сервер (uvicorn, порт 8000, путь /mcp)
      ↑
-  asyncio.gather
+  fastmcp dev apps fastmcp.json
      ↓
-Веб-фронтенд (uvicorn, порт 8080) ← HTTP-запросы к MCP через fastmcp.client.Client
+Dev-UI / браузерное превью (порт 8080, токен-URL) → MCP через app bridge
 ```
-
-Оба сервера запускаются через `uvicorn.Server._serve()` (минуя
-`capture_signals()`) с единым набором SIGINT/SIGTERM-обработчиков.
 
 ---
 
 ## Troubleshooting
 
-### `fastmcp dev apps src/hh_mcp/app.py` не работает
+### `fastmcp dev apps` не видит сервер
 
-Встроенный CLI `fastmcp dev apps <file>` **не поддерживает** `FastMCPApp` на
-fastmcp 4.0.11:
-- автодетекция завершается ошибкой `ERROR No server object found` (детекция
-  принимает только `FastMCP | SDKServer`);
-- даже при успешной детекции: `Failed to run server: 'FastMCPApp' object has
-  no attribute 'run_async'`.
+`fastmcp dev apps` требует явный `SERVER-SPEC` (в отличие от `fastmcp run`,
+который сам ищет `fastmcp.json` в текущем каталоге). Правильный вызов:
 
-**Решение**: используйте собственный `--dev`-режим проекта:
 ```bash
-hh-mcp --dev --mcp-port 8000 --dev-port 8080 --host 127.0.0.1
+uv run fastmcp dev apps fastmcp.json
 ```
+
+`fastmcp dev apps .` падает — спецификацией должен быть файл, а не каталог.
 
 ### 403 / антибот от hh.ru
 
@@ -381,5 +360,4 @@ PEP 604 (`X | None`), PEP 695.
 - [`docs/fetch_redesign.md`](docs/fetch_redesign.md) — SOLID-спецификация fetch (англ.)
 - [`AGENTS.md`](AGENTS.md) — конвенции проекта для агентов
 - [`src/hh_mcp/app.py`](src/hh_mcp/app.py) — главный модуль приложения
-- [`src/hh_mcp/__main__.py`](src/hh_mcp/__main__.py) — CLI entry point
-- [`src/hh_mcp/devapp.py`](src/hh_mcp/devapp.py) — dev-веб-приложение
+- [`server.py`](server.py) — entry point нативного пускателя
