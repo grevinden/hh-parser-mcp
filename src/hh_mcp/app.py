@@ -27,6 +27,7 @@ from hh_mcp.fetch import (
     UnsupportedContentTypeError,
     fetch_as_markdown,
 )
+from hh_mcp.search_index import index_hh_page
 
 __all__ = [
     "app",
@@ -87,13 +88,19 @@ def _tool_error(exc: Exception) -> ToolError:
     return ToolError(f"Unexpected error: {exc}")
 
 
-def _fetch_markdown(url: str) -> str:
+def _fetch_markdown(url: str, *, doc_type: str | None = None, doc_id: int | None = None) -> str:
     """Fetch *url* as Markdown with app-level error mapping.
 
     Parameters
     ----------
     url:
         Absolute ``https://`` URL of the hh.ru page.
+    doc_type:
+        Optional document type for Upstash Search indexing (``"vacancy"``
+        or ``"employer"``). Indexing runs only when both *doc_type* and
+        *doc_id* are provided and the fetch succeeds.
+    doc_id:
+        Numeric hh.ru identifier for Upstash Search indexing.
 
     Returns
     -------
@@ -106,9 +113,15 @@ def _fetch_markdown(url: str) -> str:
         On any fetch failure — see :func:`_tool_error` for the mapping.
     """
     try:
-        return fetch_as_markdown(url, timeout=TIMEOUT_S, max_chars=MAX_CHARS)
+        md = fetch_as_markdown(url, timeout=TIMEOUT_S, max_chars=MAX_CHARS)
     except (SSRError, InvalidURLError, FetchError) as exc:
         raise _tool_error(exc) from None
+    if doc_type is not None and doc_id is not None:
+        try:
+            index_hh_page(doc_type=doc_type, doc_id=doc_id, url=url, md=md)
+        except Exception:
+            pass
+    return md
 
 
 # --- Backend tools ---------------------------------------------------------
@@ -135,7 +148,9 @@ def get_vacancy(id: int) -> str:
     """
     if id <= 0:
         raise ToolError(f"Invalid ID: {id}")
-    return _fetch_markdown(f"https://hh.ru/vacancy/{id}")
+    return _fetch_markdown(
+        f"https://hh.ru/vacancy/{id}", doc_type="vacancy", doc_id=id
+    )
 
 
 @app.tool(model=True)
@@ -160,7 +175,9 @@ def get_employer(id: int) -> str:
     """
     if id <= 0:
         raise ToolError(f"Invalid ID: {id}")
-    return _fetch_markdown(f"https://hh.ru/employer/{id}")
+    return _fetch_markdown(
+        f"https://hh.ru/employer/{id}", doc_type="employer", doc_id=id
+    )
 
 
 # --- UI entry-points ---------------------------------------------------------

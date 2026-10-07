@@ -9,6 +9,7 @@ This file provides guidance to agents when working with code in this repository.
 - Получение данных о работодателе по идентификатору employer_id
 - Получение данных о вакансии + о работодателе по идентификатору vacancy_id
 - Файловый кеш ответов: повторный запрос того же id отдаётся из FileTreeStore (TTL 1 ч), hh.ru повторно не читается
+- Опциональная индексация страниц в Upstash Search (best-effort): успешные fetch-и вакансий/работодателей отправляются в индекс (env UPSTASH_SEARCH_REST_URL/TOKEN/INDEX), кеш-хиты не индексируются
 
 
 ## Состояние проекта
