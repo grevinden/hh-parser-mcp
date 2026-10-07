@@ -377,6 +377,7 @@ PEP 604 (`X | None`), PEP 695.
 ## Документация
 
 - [`docs/plan_mcp_app.md`](docs/plan_mcp_app.md) — архитектурный план (рус.)
+- [`docs/apps_mode.md`](docs/apps_mode.md) — режим приложений: интерактивные инструменты (рус.)
 - [`docs/fetch_redesign.md`](docs/fetch_redesign.md) — SOLID-спецификация fetch (англ.)
 - [`AGENTS.md`](AGENTS.md) — конвенции проекта для агентов
 - [`src/hh_mcp/app.py`](src/hh_mcp/app.py) — главный модуль приложения
