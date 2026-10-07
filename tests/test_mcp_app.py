@@ -166,6 +166,7 @@ class TestMcpTools:
             "get_employer",
             "vacancy_app",
             "employer_app",
+            "search_vacancies",
         }
 
     @pytest.mark.parametrize(

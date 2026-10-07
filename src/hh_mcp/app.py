@@ -9,6 +9,9 @@ backend tool from the in-browser app (:class:`CallTool`).
 
 from __future__ import annotations
 
+import re
+from urllib.parse import quote_plus
+
 from fastmcp import FastMCPApp
 from fastmcp.exceptions import ToolError
 from prefab_ui.actions import ShowToast
@@ -180,8 +183,61 @@ def get_employer(id: int) -> str:
     )
 
 
-# --- UI entry-points ---------------------------------------------------------
+VACANCY_ID_RE = re.compile(r'data-qa="serp-item__title"[^>]*href="[^"]*/vacancy/(\d+)', re.M)
 
+
+@app.tool(model=True)
+def search_vacancies(text: str, page: int = 0) -> list[int]:
+    """Search hh.ru vacancies and return a flat list of vacancy IDs.
+
+    Parameters
+    ----------
+    text:
+        Search query (keywords, title fragments).
+    page:
+        Zero-based page number for pagination (passed as ``&page=``).
+
+    Returns
+    -------
+    list[int]
+        List of numeric vacancy identifiers for the requested page (only IDs).
+    """
+    if not isinstance(text, str) or not text.strip():
+        raise ToolError("Invalid text: non-empty string required")
+    if not isinstance(page, int) or page < 0:
+        raise ToolError(f"Invalid page: {page}")
+
+    q = quote_plus(text.strip(), safe=" ")
+    url = (
+        "https://hh.ru/search/vacancy"
+        f"?text={q}"
+        "&search_field=name&search_field=company_name&search_field=description"
+        "&enable_snippets=false&hhtmFromLabel=chip_filter"
+        "&hhtmSource=vacancy_search_list&hhtmSourceLabel=vacancy_search_list"
+        "&L_save_area=true"
+        f"&page={page}"
+    )
+
+    try:
+        # Получаем HTML через fetch_as_markdown, но нам нужен сырой HTML?
+        # fetch_as_markdown конвертирует в Markdown. Для извлечения ID из серпа
+        # удобнее сырой HTML: используем тот же транспорт/guards.
+        from hh_mcp.fetch import fetch_page
+
+        html_bytes = fetch_page(url, timeout=TIMEOUT_S)
+        html = html_bytes.decode("utf-8", errors="replace")
+    except (SSRError, InvalidURLError, FetchError) as exc:
+        raise _tool_error(exc) from None
+    except Exception as exc:
+        raise ToolError(f"Unexpected error: {exc}") from None
+
+    ids = []
+    for m in VACANCY_ID_RE.finditer(html):
+        try:
+            ids.append(int(m.group(1)))
+        except ValueError:
+            continue
+    return ids
 @app.ui()
 def vacancy_app() -> Column:
     """Open the vacancy viewer panel.
