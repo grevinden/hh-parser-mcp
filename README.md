@@ -29,8 +29,12 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
 - **Запуск — нативный пускатель fastmcp** (`uv run fastmcp run` / `uv run
   fastmcp dev apps fastmcp.json`) из корня репозитория; транспорты stdio/http/sse.
 - **Dev UI** — браузерное превью UI-инструментов (`fastmcp dev apps`).
-- **341 тест** — `uv run pytest tests/ -v` (app, fetch-модуль, guards, html,
-  links, converter, orchestrator, transport, config, errors, enrich).
+- **Файловый кеш ответов** — `ResponseCachingMiddleware` + `FileTreeStore`
+  (без Redis) в [`server.py`](server.py): повторный вызов `get_vacancy` /
+  `get_employer` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
+  (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`).
+- **345 тестов** — `uv run pytest tests/ -v` (app, fetch-модуль, guards, html,
+  links, converter, orchestrator, transport, config, errors, enrich, caching).
 
 ---
 
@@ -206,6 +210,33 @@ http://127.0.0.1:8000/mcp
 Поддерживается любым MCP-клиентом, реализующим спецификацию streamable HTTP
 (protocol version `2026-07-28`).
 
+> Второй вызов `get_vacancy` с тем же id возвращается из файлового кеша
+> (см. [Кеширование ответов](#кеширование-ответов)).
+
+---
+
+## Кеширование ответов
+
+Чтобы одна и та же запись (вакансия / работодатель) не читалась с hh.ru
+повторно, в [`server.py`](server.py) подключён штатный
+`ResponseCachingMiddleware` с файловым хранилищем `FileTreeStore`
+(`py-key-value-aio`, уже установлен через `fastmcp[apps]` — Redis не нужен):
+
+- **Кешируются** только успешные ответы `get_vacancy` / `get_employer`
+  (`CACHED_TOOLS` в `server.py`); ошибки и остальные инструменты не кешируются.
+- **Ключ кеша** — `авторизация : версия : имя инструмента : аргументы`:
+  вызов `get_vacancy {"id": 138156968}` всегда даёт один и тот же ключ.
+- **TTL** — 1 час (`CACHE_TTL_S`); по истечении следующий вызов снова
+  уходит на hh.ru.
+- **Каталог кеша** — `~/.cache/hh-mcp` по умолчанию; переопределяется
+  переменной окружения `HH_MCP_CACHE_DIR`. Кеш переживает рестарт сервера
+  (файлы на диске).
+
+```bash
+# Пример: другой каталог кеша
+HH_MCP_CACHE_DIR=/var/cache/hh-mcp uv run fastmcp run
+```
+
 ---
 
 ## Тесты
@@ -215,8 +246,9 @@ http://127.0.0.1:8000/mcp
 uv run pytest tests/ -v
 ```
 
-**341 тестов**, все passed. Покрытие:
+**345 тестов**, все passed. Покрытие:
 - `test_mcp_app.py` — инструменты, валидация, error mapping, UI-entry;
+- `test_caching.py` — файловый кеш: повторный id не дёргает fetch;
 - `test_enrich.py` — обогащение employer-карточки;
 - `test_guards.py` — SSRF-защита (localhost, userinfo, схемы);
 - `test_html.py` — санитайзер, NoisePolicy;
