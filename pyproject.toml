@@ -11,9 +11,6 @@ dependencies = [
     "pydantic>=2.7",
 ]
 
-[project.scripts]
-hh-mcp = "hh_mcp.__main__:main"
-
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",

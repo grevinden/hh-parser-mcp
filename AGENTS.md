@@ -6,30 +6,36 @@ This file provides guidance to agents when working with code in this repository.
 Сделай коммит, когда закончил работу над задачей.
 
 ## Сервис предоставляет следующие возможности. 
-- Получение данных о работодателе. 
-- Получение данных о вакансии. 
-  - Данные о вакансии должны включать раздел с данными о работодателе. Так, чтобы их можно было отделить по какому-то разделителю. 
+- Получение данных о работодателе по идентификатору employer_id
+- Получение данных о вакансии + о работодателе по идентификатору vacancy_id
 
 
 ## Состояние проекта
-- **ПРОЕКТ ПОЛНОСТЬЮ РАБОТАЕТ**: MCP-сервер + dev UI в одном процессе, 230 тестов green.
+- **ПРОЕКТ ПОЛНОСТЬЮ РАБОТАЕТ**: MCP-сервер + UI-инструменты `FastMCPApp`; единственный вход — нативный пускатель `fastmcp run` из корня (см. «Команды»).
 - `src/hh_mcp/app.py` — `FastMCPApp("hh-mcp")` с 4 инструментами (2 model, 2 UI).
-- `src/hh_mcp/__main__.py` — CLI (argparse, `[project.scripts]` → `hh-mcp`).
-- `src/hh_mcp/devapp.py` — dev-веб-приложение (Starlette) с REST API `/api/status`, `/api/mcp`, `POST /api/mcp/call`.
-- `src/hh_mcp/fetch/` — SOLID/DIP fetch-пайплайн (9 модулей: guards, transport, html, links, converter, orchestrator, config, errors, __init__).
-- `tests/` — 10 тестовых модулей, 230 тестов.
+- `server.py` (корень) — точка входа пускателя: собирает `FastMCP` + `add_provider(hh_mcp.app.app)`, объект `mcp` (entrypoint из `fastmcp.json`).
+- `fastmcp.json` (корень) — конфиг нативного запуска (source: `server.py` → `mcp`; deployment: transport `http`, `/mcp`).
+- `src/hh_mcp/fetch/` — SOLID/DIP fetch-пайплайн (10 модулей: guards, transport, html, links, converter, orchestrator, config, errors, enrich, __init__).
+- `tests/` — 10 тестовых модулей, 335 тестов.
+- Удалены: `src/hh_mcp/__main__.py` (CLI `hh-mcp`, `--dev`), `src/hh_mcp/devapp.py` (свой dev UI) — dev-режим теперь нативный (`fastmcp dev apps`).
 
 ## Стек
 - Python ≥3.14 (CPython 3.14.4); uv 0.12.17 — единственный менеджер: в `.venv` нет `pip`; `uv.lock` — существует, обязателен к коммиту.
 - Зависимости: `fastmcp 4.0.11` (4.x — НЕ 2.x/3.x), `httpx2[http2]` (Pydantic-форк; классического `httpx` в стеку нет), `markitdown`, `playwright` (импортируется нигде — зарезервирован под browser-fetch).
 
 ## Команды
-- `uv run python -m hh_mcp` / `hh-mcp` — **работает**: запуск MCP-сервера (stdio).
-- `hh-mcp --dev --mcp-port 8000 --dev-port 8080 --host 127.0.0.1` — единый dev-процесс (MCP + веб-UI).
-- `hh-mcp --transport http --host 127.0.0.1 --port 8000` — только MCP (streamable HTTP).
-- `uv run pytest tests/ -v` — 230 passed; none `::test_name` — полный прогон.
+Запуск — **только через нативный пускатель fastmcp, из корня репозитория**:
+- `uv run fastmcp run` — MCP-сервер по `fastmcp.json`: конфиг ищется **автоматически** в текущем каталоге, аргумент не указывать (transport `http`, `http://127.0.0.1:8000/mcp`). Работает: сервер поднимается, `/mcp` отвечает, все 4 инструмента видны клиенту.
+- `uv run fastmcp dev apps fastmcp.json` — dev-режим: MCP-сервер + браузерный UI (Prefab/AppBridge, автооткрытие браузера; флаги `--mcp-port`, `--dev-port`, `--no-reload`). Нюанс: у **этой подкоманды** `SERVER-SPEC` обязателен (`fastmcp dev apps --help` → `[required]`) — в отличие от `fastmcp run`, конфиг здесь не авто-ищется.
+- `uv run fastmcp run --transport stdio` — переопределение транспорта поверх конфига.
+- **Удалено и не воссоздавать**: console-script `hh-mcp` (`[project.scripts]`), `python -m hh_mcp`, `hh-mcp --dev` (свой dev UI в одном процессе).
+- `uv run pytest tests/ -v` — 335 passed; none `::test_name` — полный прогон.
 - `uv add <pkg>` — единственная установка (уходит в `pyproject.toml`); ruff/mypy молча не подключать.
-- SSRF-проверка: `https://localhost/test` должен падать (через `fetch_as_markdown` или `UrlGuard` прямой вызов).
+
+## Безопасность (SSRF) — указание
+- `UrlGuard` должен работать по **allowlist хостов: разрешены только `hh.ru` и его поддомены** (напр. `kolomna.hh.ru`). Всё остальное — IP-литералы (`127.0.0.1`, `[::1]`, `169.254.169.254`, десятичные формы), `localhost`/`.local`, приватные и внутренние адреса, любые посторонние домены — отклонять (`SSRError`).
+- Allowlist обязан действовать **на каждый hop редиректа**: guard только на входе недостаточно (302 с публичного хоста на localhost сейчас его обходит).
+- Обязательная проверка: `https://localhost/test` должен падать (через `fetch_as_markdown` или `UrlGuard` прямой вызов).
 
 ## Структура / Стиль
 - `src/hh_mcp/`; импорт-имя пакета — `hh_mcp` (underscore; дефис невозможен).
