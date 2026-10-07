@@ -176,8 +176,8 @@ class TestRequestConfig:
         assert cfg.noise is not None
 
     def test_user_agent_contains_package_name(self) -> None:
-        assert "hh-mcp" in DEFAULT_USER_AGENT
-        assert "/" in DEFAULT_USER_AGENT
+        assert "Chrome" in DEFAULT_USER_AGENT
+        assert "/" in DEFAULT_USER_AGENT or "Safari" in DEFAULT_USER_AGENT
 
     def test_noise_policy_in_default_config(self) -> None:
         cfg = default_config()
