@@ -317,6 +317,143 @@ class TestFetchServiceHtmlToMarkdown:
         assert suffix in result
 
 
+# ---------------------------
+# Vacancy enrichment
+# ---------------------------
+
+
+def _two_page_handler(request: httpx.Request) -> httpx.Response:
+    """Serve a vacancy Markdown page and an employer Markdown page by URL.
+
+    The pages are already Markdown: the identity converter passes them through
+    unchanged, so the enrichment operates on the canonical Markdown shapes
+    (``[text](url)`` links, ``#`` headings).
+    """
+    if request.url.path.startswith("/vacancy/"):
+        return httpx.Response(
+            200,
+            text=(
+                "# Software Engineer\n\n"
+                "Company: [Ромашка](https://hh.ru/employer/11620617)\n\n"
+                "External: [example](https://example.com/resume)\n\n"
+                "![logo](https://hhcdn.ru/img/logo.png)\n\n"
+                "![inner](https://hh.ru/img/inner.png)"
+            ),
+            request=request,
+        )
+    if request.url.path.startswith("/employer/"):
+        return httpx.Response(
+            200,
+            text=(
+                "# Работа в компании «Ромашка»\n\n"
+                "# ООО Ромашка\n\n"
+                "## About the company\n\n"
+                "Мы делаем штуки. Description body.\n\n"
+                "## Актуальные вакансии\n\n"
+                "[Менеджер](https://hh.ru/vacancy/138141302)"
+            ),
+            request=request,
+        )
+    return httpx.Response(404, text="Not Found", request=request)
+
+
+def _employer_404_handler(request: httpx.Request) -> httpx.Response:
+    """Vacancy page (with employer link) is 200, the employer page is 404."""
+    if request.url.path.startswith("/vacancy/"):
+        return httpx.Response(
+            200,
+            text=(
+                "<html><head><title>Vacancy Test</title></head><body>"
+                "<p>Company: <a href=\"https://hh.ru/employer/11620617\">Ромашка</a></p>"
+                "</body></html>"
+            ),
+            request=request,
+        )
+    return httpx.Response(404, text="Not Found", request=request)
+
+
+class TestVacancyEnrichment:
+    """Spec 6-7 - employer-card enrichment of vacancy pages."""
+
+    def test_enrichment_success(self) -> None:
+        """A vacancy page gets the employer card; internal links stripped,
+        externals and hhcdn.ru images preserved."""
+        svc = _make_service(_two_page_handler, FakeConverter())
+        result = svc.fetch_as_markdown("https://hh.ru/vacancy/138156968")
+        # Employer card embedded under the canonical heading.
+        assert "## About the employer: ООО Ромашка" in result
+        # The description survived.
+        assert "Мы делаем штуки. Description body." in result
+        # The employer link itself was replaced by the plain name.
+        assert "[Ромашка](https://hh.ru/employer/11620617)" not in result
+        # Internal links/URLs stripped (vacancy-list entry, inner image).
+        assert "https://hh.ru/vacancy/138141302" not in result
+        assert "https://hh.ru/img/inner.png" not in result
+        # External link and CDN image preserved.
+        assert "https://example.com/resume" in result
+        assert "https://hhcdn.ru/img/logo.png" in result
+        # The employer's own job-list section was cut from the card.
+        assert "Актуальные вакансии" not in result
+
+    def test_no_enrichment_for_employer_page(self) -> None:
+        """Fetching an employer page directly does NOT enrich (no /vacancy/
+        gate, no recursion)."""
+        svc = _make_service(_two_page_handler, FakeConverter())
+        result = svc.fetch_as_markdown("https://hh.ru/employer/11620617")
+        assert "## About the employer:" not in result
+
+    def test_no_enrichment_without_employer_ref(self) -> None:
+        """A vacancy page with no employer link is returned unenriched."""
+        handler = lambda request: httpx.Response(  # noqa: E731
+            200,
+            text=(
+                "<html><head><title>V</title></head><body>"
+                "<p>No employer link here</p></body></html>"
+            ),
+            request=request,
+        )
+        svc = _make_service(handler, FakeConverter())
+        result = svc.fetch_as_markdown("https://hh.ru/vacancy/138156968")
+        assert "## About the employer:" not in result
+
+    def test_degradation_on_employer_404(self) -> None:
+        """Employer page 404 degrades gracefully to the unenriched card
+        (the employer link is still stripped by the final link pass)."""
+        svc = _make_service(_employer_404_handler, FakeConverter())
+        result = svc.fetch_as_markdown("https://hh.ru/vacancy/138156968")
+        assert "## About the employer:" not in result
+        assert "https://hh.ru/employer/11620617" not in result
+        assert "Ромашка" in result
+
+    def test_degradation_on_employer_timeout(self) -> None:
+        """Employer page timeout degrades gracefully."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.startswith("/vacancy/"):
+                return httpx.Response(
+                    200,
+                    text=(
+                        "<html><head><title>V</title></head><body>"
+                        "<p><a href=\"https://hh.ru/employer/11620617\">Ромашка</a></p>"
+                        "</body></html>"
+                    ),
+                    request=request,
+                )
+            raise httpx.TimeoutException("timed out", request=request)
+
+        svc = _make_service(handler, FakeConverter())
+        result = svc.fetch_as_markdown("https://hh.ru/vacancy/138156968")
+        assert "## About the employer:" not in result
+        assert "https://hh.ru/employer/11620617" not in result
+
+    def test_link_stripping_applies_to_non_vacancy_pages(self) -> None:
+        """Internal-link stripping runs on every page: the employer page is
+        returned with internal links stripped but unenriched."""
+        svc = _make_service(_two_page_handler, FakeConverter())
+        result = svc.fetch_as_markdown("https://hh.ru/employer/11620617")
+        assert "https://hh.ru/vacancy/138141302" not in result
+
+
 # ---------------------------------------------------------------------------
 # Public API (back-compat)
 # ---------------------------------------------------------------------------

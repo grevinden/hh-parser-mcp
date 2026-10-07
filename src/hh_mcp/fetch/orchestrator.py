@@ -10,8 +10,10 @@ module-level singletons, no cached global clients.
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlsplit
 
 from .config import (
+    EMPLOYER_FETCH_MAX_CHARS,
     PUBLIC_DEFAULT_MAX_CHARS,
     PUBLIC_MAX_TIMEOUT,
     PUBLIC_MIN_TIMEOUT,
@@ -23,7 +25,14 @@ from .converter import (
     default_converter,
     normalize_markdown,
 )
-from .errors import ParseError
+from .enrich import (
+    clean_employer_markdown,
+    embed_employer_card,
+    extract_company_name,
+    extract_employer_ref,
+    remove_internal_links,
+)
+from .errors import FetchError, ParseError
 from .guards import UrlGuard
 from .html import Sanitizer, sanitize_document
 from .transport import FetchTransport, default_transport
@@ -48,6 +57,23 @@ def _default_logger() -> logging.Logger:
     have configured its own logging (stdout is MCP JSON-RPC).
     """
     return logging.getLogger("hh_mcp.fetch")
+
+
+def _is_vacancy_url(url: str) -> bool:
+    """Return ``True`` when *url* targets a vacancy page (path contains
+    ``/vacancy/``).
+
+    This is the enrichment gate: only vacancy cards are enriched with an
+    employer card.  The gate is path-based (``/vacancy/``) so it works for
+    any hh.ru host; employer pages (``/employer/``) and other pages are
+    *not* enriched, which also makes the enrichment exactly 1 level deep
+    (the employee reference found inside a fetched employee page points at
+    an ``/employer/`` URL, never a ``/vacancy/`` one).
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return False
+    return "/vacancy/" in (parts.path or "").lower()
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +172,18 @@ class FetchService:
         5. Converter: HTML → Markdown.
         6. Post-process: blank-line collapse / strip, title
            deduplication, title prefix ``# <title>\\n\\n``.
-        7. Truncation at *max_chars* with ``...truncated...`` suffix.
+        7. Vacancy-page enrichment (``/vacancy/`` URLs only): the
+           employer referenced by the card is fetched through the same
+           pipeline, reduced to a compact employer card and embedded
+           under ``## About the employer: <name>``; any employer-side
+           failure degrades gracefully to the unenriched card.  Exactly
+           one level deep (employee pages carry ``/employer/`` paths, so
+           recursion is impossible by construction).
+        8. Link stripping (all pages): internal hh.ru Markdown/URL links
+           are removed (visible text is kept) and internal Markdown
+           images are dropped.  External links and ``hhcdn.ru`` CDN
+           images are preserved.
+        9. Truncation at *max_chars* with ``...truncated...`` suffix.
 
         Args:
             url:
@@ -212,6 +249,15 @@ class FetchService:
 
         out = normalize_markdown(out)
 
+        # Vacancy pages only: embed a compact employer card fetched from
+        # the card's own employer link (1 level deep; any employer-side
+        # failure degrades to the unenriched card).
+        out = self._enrich_vacancy_card(out, url, timeout=timeout)
+
+        # Strip every internal hh.ru link/URL from the final output
+        # (external links and hhcdn.ru images are preserved).
+        out = remove_internal_links(out)
+
         # Truncation
         if len(out) > max_chars:
             out = out[:max_chars] + "\n\n...truncated..."
@@ -246,6 +292,83 @@ class FetchService:
         h = h.casefold()
         t = t.casefold()
         return h == t or h in t or t in h
+
+    def _enrich_vacancy_card(
+        self,
+        markdown: str,
+        url: str,
+        *,
+        timeout: int | float | None = None,
+    ) -> str:
+        """Return *markdown* enriched with an employee-page card.
+
+        Only fires when *url* is a vacancy page (``_is_vacancy_url``) and
+        the card holds an employer reference (:func:`extract_employer_ref`).
+        In that case the employee page is fetched through the same pipeline
+        (same guard/transport — the employee URL must pass ``UrlGuard``) and
+        (capped at ``EMPLOYER_FETCH_MAX_CHARS``), then reduced to a compact
+        card (:func:`clean_employer_markdown`) and embedded under an
+        ``## About the employer: <name>`` heading
+        (:func:`embed_employer_card`).
+
+        The name is taken from the employee page
+        (:func:`extract_company_name`).  When absent, it falls back to the
+        link text found in the vacancy card.
+
+        Graceful degradation: any failure of the employee fetch
+        (:class:`FetchError` — transport / parse / conversion, or
+        :class:`ValueError` — SSRF guard) or an empty cleaned card is a
+        non-fatal *input*; a warning is logged and the original vacancy
+        Markdown is returned unchanged.  The employee card is cleaned, but
+        its own employee link (1 level) is not followed.
+
+        Args:
+            markdown:
+                Normalized vacancy Markdown (with any title prefix).
+            url:
+                The original employee URL (drives the vacancy gate).
+            timeout:
+                Per-call timeout override for the employee fetch
+                (clamped by :meth:`fetch_page`).
+
+        Returns:
+            str
+                The enriched Markdown, or *markdown* unchanged when the
+                card has no employer reference or the enrichment hit the
+                degradation path.
+        """
+        if not _is_vacancy_url(url):
+            return markdown
+
+        ref = extract_employer_ref(markdown)
+        if ref is None:
+            return markdown
+        employer_url, link_name = ref
+
+        try:
+            employer_md = self.fetch_as_markdown(
+                employer_url,
+                timeout=timeout,
+                max_chars=EMPLOYER_FETCH_MAX_CHARS,
+            )
+        except (FetchError, ValueError) as exc:
+            self._logger.warning(
+                "Employee-page fetch for %s failed (degrading to unenriched vacancy card): %s",
+                employer_url,
+                exc,
+            )
+            return markdown
+
+        name = extract_company_name(employer_md) or link_name
+        card_body = clean_employer_markdown(employer_md)
+        if not card_body:
+            self._logger.warning(
+                "Empty clean employee card for %s (degrading to unenriched vacancy card)",
+                employer_url,
+            )
+            return markdown
+
+        return embed_employer_card(markdown, name=name, card_body=card_body)
 
     def html_to_markdown(
         self,

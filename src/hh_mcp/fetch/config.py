@@ -34,6 +34,10 @@ __all__ = [
     "NOISE_CLASS_PREFIXES",
     "NOISE_DATA_QA",
     "DROP_HREF_SUBSTRINGS",
+    "EMPLOYER_MAX_CHARS",
+    "EMPLOYER_FETCH_MAX_CHARS",
+    "INTERNAL_ROOT_DOMAINS",
+    "INTERNAL_PATH_MARKERS",
     "NoisePolicy",
     "RequestConfig",
     "default_config",
@@ -56,7 +60,49 @@ PUBLIC_MIN_TIMEOUT = 1.0
 PUBLIC_MAX_TIMEOUT = 120.0
 PUBLIC_DEFAULT_MAX_CHARS = 120_000
 
-#: Internal RequestConfig validation bounds.
+# ---------------------------------------------------------------------------
+# Employer card enrichment
+# ---------------------------------------------------------------------------
+
+#: The employer embedded card is capped in characters (kept compact so the
+#: vacancy output stays readable); the card body is demoted to H4 under
+#: the ``## About the employer: <name>`` section.
+EMPLOYER_MAX_CHARS = 2_500
+
+#: Maximum Markdown characters of the fetched employer page before the
+#: card cleaning step (the card itself is then capped at
+#: ``EMPLOYER_MAX_CHARS``).
+EMPLOYER_FETCH_MAX_CHARS = 20_000
+
+# ---------------------------------------------------------------------------
+# Internal link stripping
+# ---------------------------------------------------------------------------
+
+#: Root domains that mark a link as internal (everything else, including
+#: ``*.hhcdn.ru`` CDN and arbitrary third-party hosts, is preserved).  The
+#: check compares the registered host suffix: ``hh.ru`` and any subdomain
+#: of it (e.g. ``kolomna.hh.ru``) are internal.
+INTERNAL_ROOT_DOMAINS: tuple[str, ...] = ("hh.ru",)
+
+#: Job-URL path markers: the registered host is *not* hh.ru, but the path
+#: starts with one of these (e.g. ``vacancy11620617.hh.ru``).
+INTERNAL_PATH_MARKERS: tuple[str, ...] = ("/vacancy/", "/employer/", "/company/")
+
+#: Substrings that mark a Markdown heading as the *start of the employer
+#: page's job list* (everything below is noise and cut from the card).
+_VACANCIES_HEADING_MARKERS: tuple[str, ...] = ("vacancies", "ваканси")
+
+#: Substrings that mark a Markdown heading as the *SEO title* of an
+#: employer page (the first H1 on such pages, always cut).
+_SEO_TITLE_HEADING_MARKERS: tuple[str, ...] = (
+    "work at",
+    "job at",
+    "работа в",
+    "актуальные",
+    "current vacancies",
+)
+
+#: Internal ``RequestConfig`` validation bounds.
 MIN_TIMEOUT = 0.001
 MAX_TIMEOUT = 300.0
 MAX_BODY_BYTES_LIMIT = 64 * 1024 * 1024  # 64 MiB
