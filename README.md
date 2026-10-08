@@ -236,12 +236,31 @@ MCP-клиент. Тулза `version` даёт то же плюс детали.
 **Ошибки fetch** маппятся в `ToolError` (см. `_tool_error()` в
 [`app.py`](src/hh_mcp/app.py)).
 
-**Закрытые вакансии** не 404: hh.ru редиректит на региональный лендинг
-(`kolomna.hh.ru/vrsurvey/...`), и после санитайзера остаётся один заголовок
-`# HeadHunter`. Такой ответ (тело < `MIN_CONTENT_CHARS` = 200 символов)
-отвергается с `ToolError("hh.ru returned no vacancy content … closed or
-archived vacancy redirects to a landing page")` — лучше явная ошибка, чем
-«вакансия из 12 символов».
+**Понятные сообщения вместо кодов.** Ответ 4xx/5xx поднимает
+`HttpStatusError` (подкласс `TransportError`) — он несёт `status_code`, `url`
+и `host` данными, поэтому приложение не разбирает строку httpx (в ней лежат
+хост после редиректа и ссылка на MDN — именно из-за них несуществующая вакансия
+выглядела как «HTTP 404 … For more information check: developer.mozilla.org»).
+`_http_status_message()` переводит статус в человеческий текст и называет
+страницу, а не хост:
+
+```
+vacancy 1 was not found on hh.ru (HTTP 404) — the id is wrong, the page was
+deleted, or the vacancy is closed and hh.ru stopped serving it.
+hh.ru rejected the request for employer page 999999999999 (HTTP 400) — check the id.
+hh.ru rate-limited the request for the vacancy search (HTTP 429) — retry later.
+```
+
+Закрытая вакансия может ответить и 200: hh.ru редиректит на региональный
+лендинг (`kolomna.hh.ru/vrsurvey/...`), и после санитайзера остаётся один
+заголовок `# HeadHunter`. Такой ответ (тело < `MIN_CONTENT_CHARS` = 200
+символов) отвергается отдельным сообщением — лучше явная ошибка, чем «вакансия
+из 12 символов».
+
+**Пустая выдача `search`** объясняет, что именно отсеклось (зарплата 2 раза в
+месяц, полная занятость, опыт от 1 года, без агентств и ГПХ, формат работы) и
+подсказывает, что ослаблять, — иначе пустая страница выглядит как «сломанный
+запрос».
 
 ---
 

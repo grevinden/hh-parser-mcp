@@ -24,6 +24,7 @@ from hh_mcp.app import company, vacancy
 from hh_mcp.fetch.errors import (
     ConversionError,
     FetchTimeoutError,
+    HttpStatusError,
     InvalidURLError,
     ParseError,
     ResponseTooLargeError,
@@ -114,6 +115,67 @@ class TestToolErrorMapping:
     def test_generic_fetch_error(self):
         err = app_module._tool_error(Exception("boom"))
         assert str(err) == "Unexpected error: boom"
+
+
+class TestHttpStatusErrors:
+    """A 404 must read as 'no such page', not as an httpx stack message."""
+
+    @staticmethod
+    def _status_error(status: int) -> HttpStatusError:
+        return HttpStatusError(status, "https://kolomna.hh.ru/vacancy/1", "hh.ru")
+
+    @pytest.mark.parametrize(("status", "expected"), [
+        (404, "was not found on hh.ru"),
+        (400, "rejected the request"),
+        (403, "blocked the request"),
+        (429, "rate-limited"),
+        (503, "failed to serve"),
+        (418, "Unexpected HTTP status 418"),
+    ])
+    def test_status_is_explained(self, status, expected):
+        err = app_module._tool_error(self._status_error(status))
+        assert expected in str(err)
+
+    def test_subject_names_the_page(self):
+        err = app_module._tool_error(self._status_error(404), subject="vacancy 1")
+        assert str(err) == (
+            f"vacancy 1 was not found on hh.ru (HTTP 404) — {app_module.NOT_FOUND_HINT}."
+        )
+
+    def test_no_httpx_noise_in_message(self):
+        """The raw httpx text carries the redirect host and an MDN link."""
+        text = str(app_module._tool_error(self._status_error(404), subject="vacancy 1"))
+        assert "kolomna" not in text
+        assert "developer.mozilla.org" not in text
+        assert "Client error" not in text
+
+    def test_search_404_says_what_was_searched(self):
+        err = app_module._tool_error(self._status_error(404), subject="the vacancy search")
+        assert "the vacancy search was not found" in str(err)
+
+    def test_vacancy_tool_reports_missing_page(self, monkeypatch):
+        def boom(url, **kwargs):
+            raise self._status_error(404)
+
+        monkeypatch.setattr(app_module, "fetch_as_markdown", boom)
+        with pytest.raises(ToolError, match="vacancy 38185674 was not found"):
+            vacancy(38185674)
+
+    def test_company_tool_reports_missing_page(self, monkeypatch):
+        def boom(url, **kwargs):
+            raise HttpStatusError(400, "https://kolomna.hh.ru/employer/1", "hh.ru")
+
+        monkeypatch.setattr(app_module, "fetch_as_markdown", boom)
+        with pytest.raises(ToolError, match="employer page 9410116"):
+            company(9410116)
+
+    def test_search_tool_reports_http_failure(self, monkeypatch):
+        def boom(url, **kwargs):
+            raise HttpStatusError(429, "https://hh.ru/search/vacancy", "hh.ru")
+
+        monkeypatch.setattr(app_module, "fetch_page", boom)
+        with pytest.raises(ToolError, match="rate-limited"):
+            app_module.search("аналитик", page=0)
 
 
 # --- Tool bodies (direct call) ----------------------------------------------
@@ -305,14 +367,21 @@ class TestEmptyPageGuard:
         monkeypatch.setattr(
             app_module, "fetch_as_markdown", lambda url, **kw: "# HeadHunter"
         )
-        with pytest.raises(ToolError, match="no vacancy content"):
+        with pytest.raises(ToolError, match="closed or archived"):
+            vacancy(137405648)
+
+    def test_stub_page_message_names_the_vacancy(self, monkeypatch):
+        monkeypatch.setattr(
+            app_module, "fetch_as_markdown", lambda url, **kw: "# HeadHunter"
+        )
+        with pytest.raises(ToolError, match="vacancy 137405648"):
             vacancy(137405648)
 
     def test_short_page_with_company_name_is_rejected(self, monkeypatch):
         monkeypatch.setattr(
             app_module, "fetch_as_markdown", lambda url, **kw: "# ООО Ромашка"
         )
-        with pytest.raises(ToolError, match="no vacancy content"):
+        with pytest.raises(ToolError, match="closed or archived"):
             company(12345)
 
     def test_real_page_passes(self, monkeypatch):
@@ -417,6 +486,13 @@ class TestSearchTool:
     def test_beyond_last_page_is_empty(self, monkeypatch):
         result = self._run(monkeypatch, html=b"<html></html>")
         assert "Ничего не найдено" in result.content[0].text
+
+    def test_empty_result_explains_the_fixed_filters(self, monkeypatch):
+        """An empty page is usually the filters, not a broken query."""
+        text = self._run(monkeypatch, html=b"<html></html>").content[0].text
+        assert "Программист 1С" in text
+        assert "2 раза в месяц" in text
+        assert "опытом от 1 года" in text
 
     @pytest.mark.parametrize(("text", "page", "message"), [
         ("", 0, "Invalid text"),

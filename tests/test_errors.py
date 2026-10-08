@@ -6,6 +6,7 @@ from hh_mcp.fetch.errors import (
     ConversionError,
     FetchError,
     FetchTimeoutError,
+    HttpStatusError,
     InvalidURLError,
     ParseError,
     ResponseTooLargeError,
@@ -13,6 +14,20 @@ from hh_mcp.fetch.errors import (
     TransportError,
     UnsupportedContentTypeError,
 )
+
+
+class TestHttpStatusError:
+    """A 4xx/5xx carries the status as data, not as message text."""
+
+    def test_is_a_transport_error(self) -> None:
+        assert issubclass(HttpStatusError, TransportError)
+
+    def test_keeps_the_facts(self) -> None:
+        err = HttpStatusError(404, "https://kolomna.hh.ru/vacancy/1", "hh.ru")
+        assert err.status_code == 404
+        assert err.url == "https://kolomna.hh.ru/vacancy/1"
+        assert err.host == "hh.ru"
+        assert "404" in str(err)
 
 
 class TestErrorHierarchy:

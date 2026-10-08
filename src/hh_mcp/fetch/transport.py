@@ -21,6 +21,7 @@ from .config import RequestConfig
 from .errors import (
     FetchError,
     FetchTimeoutError,
+    HttpStatusError,
     ResponseTooLargeError,
     TransportError,
     UnsupportedContentTypeError,
@@ -58,7 +59,9 @@ class FetchTransport(Protocol):
         Raises:
             TransportError:
                 On network/HTTP failure (``__cause__`` is the original
-                ``httpx2`` exception).
+                ``httpx2`` exception). A 4xx/5xx response raises the
+                :class:`~hh_mcp.fetch.errors.HttpStatusError` subclass, which
+                also carries ``status_code`` and ``url``.
             FetchTimeoutError:
                 On timeout.
             ResponseTooLargeError:
@@ -153,10 +156,12 @@ class HttpxTransport:
             UnsupportedContentTypeError:
                 If the strict content-type check is enabled (off by
                 default) and the response Content-Type is not HTML.
+            HttpStatusError:
+                On a 4xx/5xx response. Carries ``status_code`` and ``url``;
+                ``__cause__`` is the original ``httpx`` exception.
             TransportError:
-                On any other ``httpx2`` error (HTTP status errors,
-                transport errors, protocol errors); ``__cause__`` is the
-                original exception.
+                On any other ``httpx2`` error (transport errors, protocol
+                errors); ``__cause__`` is the original exception.
         """
         cfg = config or self._config
         host = str(httpx.URL(url).host)
@@ -170,8 +175,10 @@ class HttpxTransport:
             except httpx.TimeoutException as exc:
                 raise FetchTimeoutError(f"timeout fetching {host}: {exc}") from exc
             except httpx.HTTPStatusError as exc:
-                raise TransportError(
-                    f"HTTP {exc.response.status_code} fetching {host}: {exc}"
+                raise HttpStatusError(
+                    exc.response.status_code,
+                    str(exc.response.url),
+                    host,
                 ) from exc
             except httpx.HTTPError as exc:
                 raise TransportError(f"HTTP failure fetching {host}: {exc}") from exc

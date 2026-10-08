@@ -10,6 +10,7 @@ import pytest
 from hh_mcp.fetch.config import RequestConfig, default_config
 from hh_mcp.fetch.errors import (
     FetchTimeoutError,
+    HttpStatusError,
     ResponseTooLargeError,
     TransportError,
     UnsupportedContentTypeError,
@@ -96,6 +97,16 @@ class TestHttpxTransport:
             transport.fetch("https://example.com")
         assert "404" in str(exc_info.value)
         assert isinstance(exc_info.value.__cause__, httpx.HTTPStatusError)
+
+    def test_404_carries_status_and_url(self) -> None:
+        """The caller explains a 404 without parsing the httpx message."""
+        transport = self._make_mocked_transport(_handler_404)
+        with pytest.raises(HttpStatusError) as exc_info:
+            transport.fetch("https://example.com")
+        err = exc_info.value
+        assert err.status_code == 404
+        assert err.url == "https://example.com"
+        assert err.host == "example.com"
 
     def test_timeout_raises_fetch_timeout_error(self) -> None:
         transport = self._make_mocked_transport(_handler_timeout)

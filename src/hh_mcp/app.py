@@ -30,6 +30,7 @@ from hh_mcp.fetch import (
     ConversionError,
     FetchError,
     FetchTimeoutError,
+    HttpStatusError,
     InvalidURLError,
     ParseError,
     ResponseTooLargeError,
@@ -144,18 +145,63 @@ def _search_url(text: str, page: int) -> str:
 
 # --- Error mapping ---------------------------------------------------------
 
+NOT_FOUND_HINT = (
+    "the id is wrong, the page was deleted, or the vacancy is closed and "
+    "hh.ru stopped serving it"
+)
+"""What a 404 from hh.ru actually means for a vacancy or employer page."""
 
-def _tool_error(exc: Exception) -> ToolError:
+
+def _http_status_message(status: int, subject: str | None) -> str:
+    """Explain an HTTP status in the words the caller needs.
+
+    The raw ``httpx`` text is not usable: it carries the post-redirect URL (a
+    regional host for a page that does not exist) and a link to the MDN, which
+    makes a missing vacancy look like a broken server.
+
+    Parameters
+    ----------
+    status:
+        Numeric HTTP status.
+    subject:
+        What was being fetched, e.g. ``"vacancy 38185674"``. ``None`` for the
+        search endpoint, where the subject is the query itself.
+
+    Returns
+    -------
+    str
+        Human-readable sentence, no URLs.
+    """
+    what = subject or "the page"
+    if status == 404:
+        return f"{what} was not found on hh.ru (HTTP 404) — {NOT_FOUND_HINT}."
+    if status == 400:
+        return f"hh.ru rejected the request for {what} (HTTP 400) — check the id."
+    if status == 401:
+        return f"hh.ru requires authorization for {what} (HTTP 401)."
+    if status == 403:
+        return f"hh.ru blocked the request for {what} (HTTP 403) — too many requests."
+    if status == 429:
+        return f"hh.ru rate-limited the request for {what} (HTTP 429) — retry later."
+    if 500 <= status < 600:
+        return f"hh.ru failed to serve {what} (HTTP {status}) — retry later."
+    return f"Unexpected HTTP status {status} from hh.ru for {what}."
+
+
+def _tool_error(exc: Exception, *, subject: str | None = None) -> ToolError:
     """Map a fetch exception to a user-facing :class:`ToolError`.
 
-    Branching order matters: ``FetchTimeoutError`` /
-    ``ResponseTooLargeError`` are ``TransportError`` subclasses and are
-    matched before the generic transport branch.
+    Branching order matters: ``FetchTimeoutError`` / ``ResponseTooLargeError``
+    / ``HttpStatusError`` are ``TransportError`` subclasses and are matched
+    before the generic transport branch.
 
     Parameters
     ----------
     exc:
         Exception raised by the fetch pipeline.
+    subject:
+        What was being fetched, in English, e.g. ``"vacancy 38185674"``. Used
+        by the HTTP-status branch to name the page instead of the host.
 
     Returns
     -------
@@ -170,6 +216,8 @@ def _tool_error(exc: Exception) -> ToolError:
         return ToolError(f"Timeout after {TIMEOUT_S}s")
     if isinstance(exc, ResponseTooLargeError):
         return ToolError(f"Response too large > {MAX_CHARS}")
+    if isinstance(exc, HttpStatusError):
+        return ToolError(_http_status_message(exc.status_code, subject))
     if isinstance(exc, (ParseError, ConversionError)):
         return ToolError(f"Parse error: {exc}")
     if isinstance(exc, UnsupportedContentTypeError):
@@ -197,6 +245,27 @@ def _markdown_body(md: str) -> str:
     return "\n".join(
         line for line in md.splitlines() if not line.lstrip().startswith("#")
     ).strip()
+
+
+def _page_subject(doc_type: str | None, doc_id: int | None) -> str | None:
+    """Name the page being fetched, for error messages.
+
+    Parameters
+    ----------
+    doc_type:
+        ``"vacancy"`` or ``"employer"``, or ``None`` for a plain URL.
+    doc_id:
+        Numeric hh.ru identifier.
+
+    Returns
+    -------
+    str | None
+        e.g. ``"vacancy 38185674"``, or ``None`` when the page is unknown.
+    """
+    if doc_type is None or doc_id is None:
+        return None
+    noun = "vacancy" if doc_type == "vacancy" else "employer page"
+    return f"{noun} {doc_id}"
 
 
 def _fetch_markdown(url: str, *, doc_type: str | None = None, doc_id: int | None = None) -> str:
@@ -233,17 +302,19 @@ def _fetch_markdown(url: str, *, doc_type: str | None = None, doc_id: int | None
             return stored
         logger.info("page not in db tier, going to hh.ru: url=%s", url)
 
+    subject = _page_subject(doc_type, doc_id)
     try:
         md = fetch_as_markdown(url, timeout=TIMEOUT_S, max_chars=MAX_CHARS)
     except (SSRError, InvalidURLError, FetchError) as exc:
-        raise _tool_error(exc) from None
+        raise _tool_error(exc, subject=subject) from None
 
     logger.info("page fetched from hh.ru: url=%s chars=%d", url, len(md))
 
     if len(_markdown_body(md)) < MIN_CONTENT_CHARS:
         raise ToolError(
-            f"hh.ru returned no vacancy content for {url} "
-            "(closed or archived vacancy redirects to a landing page)"
+            f"hh.ru served no usable content for {subject or url} (HTTP 200): "
+            "the response is a landing or lead form, not the page you asked "
+            "for — the vacancy is closed or archived"
         )
 
     if doc_type is not None and doc_id is not None:
@@ -344,7 +415,7 @@ def search(text: str, page: int = 0) -> ToolResult:
     try:
         html = fetch_page(url, timeout=TIMEOUT_S).decode("utf-8", errors="replace")
     except (SSRError, InvalidURLError, FetchError) as exc:
-        raise _tool_error(exc) from None
+        raise _tool_error(exc, subject="the vacancy search") from None
     except Exception as exc:
         raise ToolError(f"Unexpected error: {exc}") from None
 
@@ -354,7 +425,14 @@ def search(text: str, page: int = 0) -> ToolResult:
         joined = ", ".join(str(i) for i in ids)
         summary = f"Найдено {len(ids)} вакансий (страница {page}): {joined}"
     else:
-        summary = f"Ничего не найдено (страница {page})."
+        summary = (
+            f"Ничего не найдено по запросу «{text.strip()}» (страница {page}). "
+            "Поиск идёт только по вакансиям с зарплатой 2 раза в месяц, "
+            "полной занятостью, опытом от 1 года, без агентств и ГПХ; "
+            "формат работы — удалённо, в офисе или гибрид. "
+            "Если фильтры — не часть задачи, ослабьте запрос: уберите операторы "
+            "NOT, кавычки и поля вида NAME:, и попробуйте более общее слово."
+        )
 
     return ToolResult(content=summary)
 
