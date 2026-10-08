@@ -75,6 +75,9 @@ landing/lead page (e.g. ``kolomna.hh.ru/vrsurvey/...``) whose ``<main>`` holds
 only an embedded JSON state dump. The sanitizer strips that and Markdown ends up
 as a lone ``# HeadHunter`` title. Passing it off as the vacancy would be a silent
 lie, so the tool reports a fetch failure instead.
+
+The message states only what was observed — that the page has no content. Why
+it has none is not the server's to guess at.
 """
 
 # --- Logging ----------------------------------------------------------------
@@ -153,47 +156,43 @@ def _search_url(text: str, page: int) -> str:
 
 # --- Error mapping ---------------------------------------------------------
 
-NOT_FOUND_HINT = (
-    "the id is wrong, the page was deleted, or the vacancy is closed and "
-    "hh.ru stopped serving it"
-)
-"""What a 404 from hh.ru actually means for a vacancy or employer page."""
-
-
 def _http_status_message(status: int, subject: str | None) -> str:
-    """Explain an HTTP status in the words the caller needs.
+    """Say what the status means, in one sentence and no longer.
 
-    The raw ``httpx`` text is not usable: it carries the post-redirect URL (a
+    The raw ``httpx`` text is unusable: it carries the post-redirect URL (a
     regional host for a page that does not exist) and a link to the MDN, which
     makes a missing vacancy look like a broken server.
+
+    400 and 404 share one message on purpose. hh.ru answers an unknown vacancy
+    with 404 and an unknown employer with 400, but both mean the same thing to
+    the caller — there is no such page — so the agent gets one conclusion
+    instead of two codes to interpret.
 
     Parameters
     ----------
     status:
         Numeric HTTP status.
     subject:
-        What was being fetched, e.g. ``"vacancy 38185674"``. ``None`` for the
-        search endpoint, where the subject is the query itself.
+        The page, named so the sentence reads as a sentence: ``"Vacancy
+        38185674"``. ``None`` falls back to a generic subject.
 
     Returns
     -------
     str
-        Human-readable sentence, no URLs.
+        One sentence, no URLs.
     """
-    what = subject or "the page"
-    if status == 404:
-        return f"{what} was not found on hh.ru (HTTP 404) — {NOT_FOUND_HINT}."
-    if status == 400:
-        return f"hh.ru rejected the request for {what} (HTTP 400) — check the id."
+    what = subject or "The requested page"
+    if status in (400, 404):
+        return f"{what} does not exist on hh.ru (HTTP {status})."
     if status == 401:
-        return f"hh.ru requires authorization for {what} (HTTP 401)."
+        return f"hh.ru requires authorization for {what.lower()} (HTTP 401)."
     if status == 403:
-        return f"hh.ru blocked the request for {what} (HTTP 403) — too many requests."
+        return f"hh.ru blocked the request (HTTP 403): too many requests, retry later."
     if status == 429:
-        return f"hh.ru rate-limited the request for {what} (HTTP 429) — retry later."
+        return f"hh.ru rate-limited the request (HTTP 429): retry later."
     if 500 <= status < 600:
-        return f"hh.ru failed to serve {what} (HTTP {status}) — retry later."
-    return f"Unexpected HTTP status {status} from hh.ru for {what}."
+        return f"hh.ru failed to serve {what.lower()} (HTTP {status}): retry later."
+    return f"Unexpected HTTP status {status} from hh.ru."
 
 
 def _tool_error(exc: Exception, *, subject: str | None = None) -> ToolError:
@@ -272,7 +271,7 @@ def _page_subject(doc_type: str | None, doc_id: int | None) -> str | None:
     """
     if doc_type is None or doc_id is None:
         return None
-    noun = "vacancy" if doc_type == "vacancy" else "employer page"
+    noun = "Vacancy" if doc_type == "vacancy" else "Employer page"
     return f"{noun} {doc_id}"
 
 
@@ -320,9 +319,7 @@ def _fetch_markdown(url: str, *, doc_type: str | None = None, doc_id: int | None
 
     if len(_markdown_body(md)) < MIN_CONTENT_CHARS:
         raise ToolError(
-            f"hh.ru served no usable content for {subject or url} (HTTP 200): "
-            "the response is a landing or lead form, not the page you asked "
-            "for — the vacancy is closed or archived"
+            f"{subject or 'The requested page'} has no content on hh.ru."
         )
 
     if doc_type is not None and doc_id is not None:
@@ -431,7 +428,7 @@ def search(text: str, page: int = 0) -> ToolResult:
     try:
         html = fetch_page(url, timeout=TIMEOUT_S).decode("utf-8", errors="replace")
     except (SSRError, InvalidURLError, FetchError) as exc:
-        raise _tool_error(exc, subject="the vacancy search") from None
+        raise _tool_error(exc, subject="The vacancy search") from None
     except Exception as exc:
         raise ToolError(f"Unexpected error: {exc}") from None
 
@@ -443,11 +440,9 @@ def search(text: str, page: int = 0) -> ToolResult:
     else:
         summary = (
             f"Ничего не найдено по запросу «{text.strip()}» (страница {page}). "
-            "Поиск идёт только по вакансиям с зарплатой 2 раза в месяц, "
-            "полной занятостью, опытом от 1 года, без агентств и ГПХ; "
-            "формат работы — удалённо, в офисе или гибрид. "
-            "Если фильтры — не часть задачи, ослабьте запрос: уберите операторы "
-            "NOT, кавычки и поля вида NAME:, и попробуйте более общее слово."
+            "Поиск ограничен фильтрами: зарплата 2 раза в месяц, полная "
+            "занятость, опыт от 1 года, без агентств и ГПХ, формат работы — "
+            "удалённо, в офисе или гибрид."
         )
 
     return ToolResult(content=summary)

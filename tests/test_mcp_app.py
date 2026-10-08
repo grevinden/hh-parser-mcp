@@ -125,8 +125,8 @@ class TestHttpStatusErrors:
         return HttpStatusError(status, "https://kolomna.hh.ru/vacancy/1", "hh.ru")
 
     @pytest.mark.parametrize(("status", "expected"), [
-        (404, "was not found on hh.ru"),
-        (400, "rejected the request"),
+        (404, "does not exist on hh.ru (HTTP 404)"),
+        (400, "does not exist on hh.ru (HTTP 400)"),
         (403, "blocked the request"),
         (429, "rate-limited"),
         (503, "failed to serve"),
@@ -137,28 +137,50 @@ class TestHttpStatusErrors:
         assert expected in str(err)
 
     def test_subject_names_the_page(self):
-        err = app_module._tool_error(self._status_error(404), subject="vacancy 1")
-        assert str(err) == (
-            f"vacancy 1 was not found on hh.ru (HTTP 404) — {app_module.NOT_FOUND_HINT}."
+        err = app_module._tool_error(self._status_error(404), subject="Vacancy 1")
+        assert str(err) == "Vacancy 1 does not exist on hh.ru (HTTP 404)."
+
+    @pytest.mark.parametrize("status", [400, 404])
+    def test_400_and_404_say_the_same_thing(self, status):
+        """hh.ru answers an unknown vacancy with 404 and an unknown employer
+        with 400. Both mean the same to the caller, so the agent must not be
+        left interpreting two codes."""
+        message = app_module._tool_error(
+            self._status_error(status), subject="Employer page 1"
         )
+        assert str(message) == f"Employer page 1 does not exist on hh.ru (HTTP {status})."
+
+    def test_message_is_one_short_sentence(self):
+        """No list of possible causes: the agent needs a conclusion, not a menu
+        of guesses to weigh. "Vacancy 1." has an abbreviation dot; the message
+        must not add a second sentence after it."""
+        text = str(app_module._tool_error(self._status_error(404), subject="Vacancy 1"))
+        assert text == "Vacancy 1 does not exist on hh.ru (HTTP 404)."
+        assert len(text) < 60
+
+    def test_message_does_not_speculate(self):
+        """The server observed a status, not a reason for it."""
+        text = str(app_module._tool_error(self._status_error(404), subject="Vacancy 1"))
+        for guess in ("maybe", "perhaps", "possibly", "wrong", "deleted", "moved"):
+            assert guess not in text.lower(), guess
 
     def test_no_httpx_noise_in_message(self):
         """The raw httpx text carries the redirect host and an MDN link."""
-        text = str(app_module._tool_error(self._status_error(404), subject="vacancy 1"))
+        text = str(app_module._tool_error(self._status_error(404), subject="Vacancy 1"))
         assert "kolomna" not in text
         assert "developer.mozilla.org" not in text
         assert "Client error" not in text
 
     def test_search_404_says_what_was_searched(self):
-        err = app_module._tool_error(self._status_error(404), subject="the vacancy search")
-        assert "the vacancy search was not found" in str(err)
+        err = app_module._tool_error(self._status_error(404), subject="The vacancy search")
+        assert str(err) == "The vacancy search does not exist on hh.ru (HTTP 404)."
 
     def test_vacancy_tool_reports_missing_page(self, monkeypatch):
         def boom(url, **kwargs):
             raise self._status_error(404)
 
         monkeypatch.setattr(app_module, "fetch_as_markdown", boom)
-        with pytest.raises(ToolError, match="vacancy 38185674 was not found"):
+        with pytest.raises(ToolError, match="Vacancy 38185674 does not exist on hh.ru"):
             vacancy(38185674)
 
     def test_company_tool_reports_missing_page(self, monkeypatch):
@@ -166,7 +188,7 @@ class TestHttpStatusErrors:
             raise HttpStatusError(400, "https://kolomna.hh.ru/employer/1", "hh.ru")
 
         monkeypatch.setattr(app_module, "fetch_as_markdown", boom)
-        with pytest.raises(ToolError, match="employer page 9410116"):
+        with pytest.raises(ToolError, match="Employer page 9410116"):
             company(9410116)
 
     def test_search_tool_reports_http_failure(self, monkeypatch):
@@ -473,21 +495,33 @@ class TestEmptyPageGuard:
         monkeypatch.setattr(
             app_module, "fetch_as_markdown", lambda url, **kw: "# HeadHunter"
         )
-        with pytest.raises(ToolError, match="closed or archived"):
+        with pytest.raises(ToolError, match="has no content"):
             vacancy(137405648)
 
     def test_stub_page_message_names_the_vacancy(self, monkeypatch):
         monkeypatch.setattr(
             app_module, "fetch_as_markdown", lambda url, **kw: "# HeadHunter"
         )
-        with pytest.raises(ToolError, match="vacancy 137405648"):
+        with pytest.raises(ToolError, match="Vacancy 137405648 has no content"):
             vacancy(137405648)
+
+    def test_message_does_not_guess_why(self, monkeypatch):
+        """The server observed an empty page, nothing more. Saying "closed or
+        archived" would be inventing a cause."""
+        monkeypatch.setattr(
+            app_module, "fetch_as_markdown", lambda url, **kw: "# HeadHunter"
+        )
+        with pytest.raises(ToolError) as excinfo:
+            vacancy(137405648)
+        text = str(excinfo.value)
+        assert "closed" not in text
+        assert "archived" not in text
 
     def test_short_page_with_company_name_is_rejected(self, monkeypatch):
         monkeypatch.setattr(
             app_module, "fetch_as_markdown", lambda url, **kw: "# ООО Ромашка"
         )
-        with pytest.raises(ToolError, match="closed or archived"):
+        with pytest.raises(ToolError, match="has no content"):
             company(12345)
 
     def test_real_page_passes(self, monkeypatch):
@@ -593,12 +627,19 @@ class TestSearchTool:
         result = self._run(monkeypatch, html=b"<html></html>")
         assert "Ничего не найдено" in result.content[0].text
 
-    def test_empty_result_explains_the_fixed_filters(self, monkeypatch):
-        """An empty page is usually the filters, not a broken query."""
+    def test_empty_result_states_the_fixed_filters(self, monkeypatch):
+        """Filters are a fact about this server, not a guess about the cause."""
         text = self._run(monkeypatch, html=b"<html></html>").content[0].text
         assert "Программист 1С" in text
         assert "2 раза в месяц" in text
-        assert "опытом от 1 года" in text
+        assert "опыт от 1 года" in text
+
+    def test_empty_result_does_not_guess_the_cause(self, monkeypatch):
+        """The server knows what filters it sent, not why hh.ru returned
+        nothing. It must not offer the agent a menu of explanations."""
+        text = self._run(monkeypatch, html=b"<html></html>").content[0].text
+        assert "возможных причин" not in text.lower()
+        assert "отсеял" not in text.lower()
 
     @pytest.mark.parametrize(("text", "page", "message"), [
         ("", 0, "Invalid text"),
