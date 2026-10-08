@@ -1,9 +1,8 @@
-"""Tests for the hh-mcp tools (vacancy, company, search).
+"""Tests for the hh-mcp tools (vacancy, company, search, version).
 
-Covers error mapping, argument validation, and the Apps UI contract: each tool
-is declared with ``app=PrefabAppConfig(visibility=["app", "model"])`` and
-returns a ``ToolResult`` whose ``structured_content`` the Prefab renderer draws
-while the model reads ``content``.
+Covers error mapping, argument validation, and the response contract: a tool
+returns a ``ToolResult`` with ``content`` only, so a payload reaches the client
+exactly once — no Prefab view, no ``structuredContent.result`` mirror.
 
 Uses the in-memory ``FastMCPTransport`` client (no network, no HTTP server).
 ``fetch_as_markdown`` is always monkeypatched — the real fetch is covered
@@ -146,18 +145,16 @@ class TestToolValidation:
 
         monkeypatch.setattr(app_module, "fetch_as_markdown", fake)
 
-        # ToolResult serves both audiences: text for the model, Prefab view
-        # for the browser (gofastmcp.com/apps/prefab).
+        # Text only: the payload must not be mirrored into a UI copy.
         result = vacancy(38185674)
         assert seen["url"] == "https://hh.ru/vacancy/38185674"
         assert result.content[0].text.startswith("markdown")
-        assert result.structured_content["$prefab"]["version"]
-        # Prefab wraps the view in a root Div carrying pf-app-root.
-        assert result.structured_content["view"]["type"] == "Div"
+        assert result.structured_content is None
 
         result = company(9410116)
         assert seen["url"] == "https://hh.ru/employer/9410116"
         assert result.content[0].text.startswith("markdown")
+        assert result.structured_content is None
 
 
 # --- In-memory client over FastMCPTransport ---------------------------------
@@ -171,7 +168,7 @@ class TestMcpTools:
             async with Client(FastMCPTransport(app_module.mcp)) as client:
                 return {t.name for t in await client.list_tools()}
 
-        assert asyncio.run(_run()) == {"vacancy", "company", "search"}
+        assert asyncio.run(_run()) == {"vacancy", "company", "search", "version"}
 
     @pytest.mark.parametrize(
         ("tool", "id_", "url_frag"),
@@ -239,55 +236,63 @@ class TestMcpTools:
         assert result.is_error is True
 
 
-# --- Dual registration: one tool for model + browser ---------------------------
+# --- Response contract: the payload travels once ----------------------------
 
 
-class TestDualRegistration:
-    """Each tool serves the model AND the browser Apps picker at once."""
+class TestSingleCopyResponse:
+    """Nothing in the tool result repeats the payload.
+
+    Two mechanisms used to double it: a ``-> str`` return, which fastmcp
+    mirrors into ``structuredContent.result``, and a Prefab view, which embeds
+    the same text for the browser. A client walking twenty vacancy IDs would
+    then pay for forty pages, so both are gone and this pins that down.
+    """
+
+    MARKER = "PAGEMARKER"
 
     def _tools(self):
         async def _run():
             async with Client(FastMCPTransport(app_module.mcp)) as client:
-                return await client.list_tools()
+                return {t.name: t for t in await client.list_tools()}
 
-        return {t.name: t for t in asyncio.run(_run())}
+        return asyncio.run(_run())
 
-    def test_all_three_tools_registered(self):
-        assert set(self._tools()) == {"vacancy", "company", "search"}
+    def test_all_four_tools_registered(self):
+        assert set(self._tools()) == {"vacancy", "company", "search", "version"}
 
-    def test_visible_to_model(self):
+    def test_no_ui_metadata(self):
+        """Plain tools: no Prefab resourceUri and no visibility block."""
         for name, tool in self._tools().items():
-            assert tool.meta["ui"]["visibility"] == ["app", "model"], name
+            assert "ui" not in tool.meta, name
 
-    def test_reaches_browser_picker(self):
-        """The picker lists only tools carrying a Prefab resourceUri.
-
-        fastmcp rewrites the placeholder into a per-tool renderer URI at
-        list_tools time, so the browser UI needs no separate entry-point tool.
-        """
-        for name, tool in self._tools().items():
-            resource_uri = tool.meta["ui"]["resourceUri"]
-            assert resource_uri.startswith("ui://prefab/tool/"), name
-            assert resource_uri.endswith("/renderer.html"), name
-
-    def test_renderer_resource_is_synthesized(self):
+    def test_no_renderer_resources(self):
         async def _run():
             async with Client(FastMCPTransport(app_module.mcp)) as client:
                 return [str(r.uri) for r in await client.list_resources()]
 
-        resources = asyncio.run(_run())
-        uris = {t.meta["ui"]["resourceUri"] for t in self._tools().values()}
-        assert uris.issubset(set(resources))
+        assert not [u for u in asyncio.run(_run()) if u.startswith("ui://")]
 
-    def test_input_schema_generated_for_browser_form(self):
-        """The picker builds the browser form from the tool's own schema."""
-        tools = self._tools()
-        assert set(tools["vacancy"].input_schema["properties"]) == {"id"}
-        assert set(tools["search"].input_schema["properties"]) == {"text", "page"}
-        assert tools["search"].input_schema["required"] == ["text"]
+    def test_page_tool_ships_one_copy(self, monkeypatch):
+        monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch(self.MARKER))
+        result = vacancy(38185674)
+        assert result.model_dump_json().count(self.MARKER) == 1
+
+    def test_search_ships_one_copy(self, monkeypatch):
+        html = b'<div data-qa="serp-item__title" href="/vacancy/111"></div>'
+        monkeypatch.setattr(app_module, "fetch_page", lambda url, **kw: html)
+        result = app_module.search("DevOps", page=0)
+        assert result.model_dump_json().count("111") == 1
+
+    def test_handshake_reports_build(self):
+        """serverInfo.version is where any MCP client reads the build from."""
+        from hh_mcp.version import BUILD_ID, package_version
+
+        assert app_module.mcp.name == "hh-mcp"
+        assert app_module.mcp.version == BUILD_ID
+        assert BUILD_ID.startswith(package_version())
 
 
-# --- search: ToolResult with a DataTable view --------------------------------
+# --- search: IDs for the model -----------------------------------------------
 
 
 class TestEmptyPageGuard:
@@ -315,7 +320,7 @@ class TestEmptyPageGuard:
 
 
 class TestSearchTool:
-    """search() returns IDs for the model and a sortable table for the browser."""
+    """search() returns a flat list of vacancy IDs."""
 
     SERP_HTML = (
         b'<div data-qa="serp-item__title" href="/vacancy/111"></div>'
@@ -337,12 +342,9 @@ class TestSearchTool:
         assert "222" in result.content[0].text
         assert "страница 1" in result.content[0].text
 
-    def test_renders_table_for_browser(self, monkeypatch):
+    def test_no_view_copy(self, monkeypatch):
         result = self._run(monkeypatch)
-        view = str(result.structured_content["view"])
-        assert "'type': 'DataTable'" in view
-        assert "'id': 111" in view
-        assert "'id': 222" in view
+        assert result.structured_content is None
 
     def test_page_goes_to_query(self, monkeypatch):
         seen: dict[str, str] = {}
@@ -356,25 +358,16 @@ class TestSearchTool:
         assert "text=1%D0%A1" in seen["url"]
         assert seen["url"].endswith("&page=7")
 
-    def test_view_heading_has_no_id_list(self, monkeypatch):
-        """The table already lists the IDs, so the view must not repeat them."""
+    def test_each_id_appears_once(self, monkeypatch):
+        """Every ID occurs in the result exactly once — text only, no table."""
         result = self._run(monkeypatch)
-        view = str(result.structured_content["view"])
-        assert view.count("111") == 1  # единственное вхождение — строка таблицы
-        assert view.count("222") == 1
-        assert "Найдено 2 вакансий (страница 1)" in view
-
-    def test_ids_appear_once_in_content_and_once_in_rows(self, monkeypatch):
-        """Each ID travels twice in the result: model text and table row."""
-        result = self._run(monkeypatch)
-        payload = f"{result.content[0].text}{result.structured_content}"
-        assert payload.count("111") == 2
-        assert payload.count("222") == 2
+        payload = result.model_dump_json()
+        assert payload.count("111") == 1
+        assert payload.count("222") == 1
 
     def test_beyond_last_page_is_empty(self, monkeypatch):
         result = self._run(monkeypatch, html=b"<html></html>")
         assert "Ничего не найдено" in result.content[0].text
-        assert "DataTable" in str(result.structured_content["view"])
 
     @pytest.mark.parametrize(("text", "page", "message"), [
         ("", 0, "Invalid text"),

@@ -3,13 +3,15 @@
 [![Python ≥3.14](https://img.shields.io/badge/python-3.14%2B-blue)](https://www.python.org/)
 [![FastMCP 4.x](https://img.shields.io/badge/FastMCP-4.x-purple)](https://github.com/PrefectHQ/fastmcp)
 [![uv](https://img.shields.io/badge/uv-0.12.x-green)](https://docs.astral.sh/uv/)
-[![prefab‑ui](https://img.shields.io/badge/prefab--ui-0.20%2B-orange)](https://github.com/PrefectHQ/prefab-ui)
-
 **hh-mcp** — MCP-сервер (Model Context Protocol) для получения страниц с hh.ru
-в формате Markdown. Три инструмента — [`vacancy`](src/hh_mcp/app.py),
-[`company`](src/hh_mcp/app.py) и [`search`](src/hh_mcp/app.py) — работают
-одновременно для LLM-агентов (MCP) и для браузера (Apps UI): отдельные
-UI-входные инструменты не нужны.
+в формате Markdown. Четыре текстовых инструмента — [`vacancy`](src/hh_mcp/app.py),
+[`company`](src/hh_mcp/app.py), [`search`](src/hh_mcp/app.py) и
+[`version`](src/hh_mcp/app.py).
+
+Каждый инструмент возвращает `ToolResult` **только** с `content`: ответ несёт
+данные ровно один раз. Браузерный Apps UI отключён намеренно — встроенный в
+ответ Prefab-view дублировал бы каждую страницу, и клиент, обходящий 20 ID,
+получал бы 40 страниц вместо 20 (см. [`docs/apps_mode.md`](docs/apps_mode.md)).
 
 Запуск — нативный пускатель fastmcp из корня (`uv run fastmcp run` —
 MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузерный UI-превью).
@@ -20,23 +22,28 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
 
 ## Возможности
 
-- **3 инструмента MCP** — `vacancy`, `company`, `search`. Каждый виден и модели
-  (`visibility: ["app", "model"]`), и веб-пикеру Apps: meta несёт плейсхолдер
-  Prefab-рендерера, fastmcp синтезирует ресурс `ui://prefab/tool/<hash>/renderer.html`,
-  а форма ввода генерируется из JSON-схемы инструмента.
+- **4 текстовых инструмента MCP** — `vacancy`, `company`, `search`, `version`.
+  Никакого UI в ответе: данные уходят ровно один раз (проверено на живом
+  сервере — 1.04× к длине текста, `structuredContent` отсутствует).
+- **`version` + `serverInfo.version`** — сборка видна в handshake (стандартное
+  поле MCP) и отдельной тулзой, поэтому после деплоя сразу понятно, какой
+  коммит разлился. Номер версии поднимается с каждым коммитом
+  (`0.2.0` в [`pyproject.toml`](pyproject.toml)).
 - **Fetch-пайплайн SOLID/DIP** — SSRF-защита, HTTP/2-транспорт (httpx2),
   HTML-санитайзер с NoisePolicy, разрешение ссылок, конвертация в Markdown
   (markitdown). Иерархия исключений — [`errors.py`](src/hh_mcp/fetch/errors.py).
 - **Запуск — нативный пускатель fastmcp** (`uv run fastmcp run` / `uv run
   fastmcp dev apps fastmcp.json`) из корня репозитория; транспорты stdio/http/sse.
-- **Dev UI** — браузерное превью UI-инструментов (`fastmcp dev apps`).
+- **Никаких зависимостей на UI** — `prefab-ui` и экстра `fastmcp[apps]`
+  удалены, в коде нет ни одного импорта `prefab_ui`.
 - **Файловый кеш ответов** — `ResponseCachingMiddleware` + `FileTreeStore`
   (без Redis) в [`server.py`](server.py): повторный вызов `vacancy` /
   `company` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
   (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`;
   отключается флагом `HH_MCP_CACHE=0`).
-- **377 тестов** — `uv run pytest tests/ -v` (app, fetch-модуль, guards, html,
-  links, converter, orchestrator, transport, config, errors, enrich, caching).
+- **406 тестов** — `uv run pytest tests/ -v` (app, версия, конфиг деплоя,
+  fetch-модуль, guards, html, links, converter, orchestrator, transport,
+  config, errors, enrich, caching).
 
 ---
 
@@ -73,7 +80,7 @@ uv sync
 ```
 
 После `uv sync` становятся доступны:
-- все зависимости (`fastmcp[apps]`, `httpx2[http2]`, `markitdown`, `prefab-ui`,
+- все зависимости (`fastmcp`, `httpx2[http2]`, `markitdown`,
   `upstash-search`).
 
 > **Важно**: `pip install` не используется. Добавление зависимостей — только
@@ -96,7 +103,7 @@ uv run fastmcp run
 MCP-эндпоинт: `http://127.0.0.1:8000/mcp` (streamable HTTP).
 Переопределение транспорта: `uv run fastmcp run --transport stdio`.
 
-### 2. Dev-режим (MCP + браузерный UI-превью)
+### 2. Dev-режим (MCP + браузерное превью)
 
 ```bash
 uv run fastmcp dev apps fastmcp.json
@@ -104,7 +111,8 @@ uv run fastmcp dev apps fastmcp.json
 
 Открываются два адреса:
 - **Dev UI**: `http://127.0.0.1:8080/?token=…` — браузерное превью
-  UI-инструментов (открывается автоматически; без токена — 403).
+  (открывается автоматически; без токена — 403). Инструменты текстовые, без
+  UI-view, поэтому пикер показывает только формы ввода из JSON-схем.
 - **MCP endpoint**: `http://127.0.0.1:8000/mcp` — streamable HTTP для
   MCP-клиентов.
 
@@ -149,10 +157,11 @@ Dev-режим — отдельная подкоманда `fastmcp dev apps fas
 
 Dev-режим — нативный (`uv run fastmcp dev apps fastmcp.json`): MCP-сервер
 на порту 8000 (`/mcp`) + браузерный UI превью на порту 8080 (токен-URL,
-открывается автоматически). Это интерфейс **для отладки** инструментов: пикер
-показывает все три (`vacancy`, `company`, `search`) и строит форму ввода из их
-JSON-схем; в нём же видна панель операций сервера (все вызовы `tools/call` с
-аргументами и JSON-ответами).
+открывается автоматически). Это интерфейс **для отладки**: пикер показывает
+все четыре инструмента (`vacancy`, `company`, `search`, `version`) и строит
+форму ввода из их JSON-схем; в нём же видна панель операций сервера (все вызовы
+`tools/call` с аргументами и JSON-ответами). Страницу вакансии интерфейс не
+рисует — UI-view в ответе намеренно нет, см. «Инструменты MCP».
 
 Прежний собственный dev-UI (`src/hh_mcp/devapp.py`, Starlette, страница
 `GET /` и REST `/api/*`) **удалён** — см. коммит `a30bcb9`.
@@ -188,22 +197,30 @@ uv run fastmcp call http://127.0.0.1:8000/mcp company id=11620617 --json
 
 ## Инструменты MCP
 
-Все три инструмента объявлены как `@mcp.tool(app=PrefabAppConfig(visibility=["app","model"]))`
-и возвращают `ToolResult`. Это штатный механизм FastMCP Apps: один инструмент
-обслуживает и модель, и браузер — отдельных UI-инструментов не нужно.
+Все инструменты объявлены как `@mcp.tool` и возвращают `ToolResult` только с
+`content`. Два правила, из-за которых это важно:
 
-| Имя | Параметры | Модель получает (`content`) | Браузер рисует (`structured_content`) |
-|-----|-----------|----------------------------|--------------------------------------|
-| `vacancy` | `id: int` (строго положительный) | Markdown страницы вакансии hh.ru (timeout 30 с, макс. 120 000 символов) | `Markdown` с тем же текстом |
-| `company` | `id: int` (строго положительный) | Markdown страницы компании hh.ru | `Markdown` с тем же текстом |
-| `search` | `text: str`, `page: int = 0` | «Найдено N вакансий (страница P): …» — список ID | `DataTable` с ID (сортировка, поиск) |
+- возврат `-> str` заставил бы fastmcp продублировать текст в
+  `structuredContent.result` (wrap-result) — данные ушли бы в контекст дважды;
+- Prefab-view в `structured_content` — третья копия тех же данных.
 
-Как это работает: `app=PrefabAppConfig(...)` синтезирует ресурс рендерера
-`ui://prefab/tool/<hash>/renderer.html`, поэтому инструмент попадает в браузерный
-пикер, а форма ввода строится из его же JSON-схемы. `ToolResult` отдаёт модели
-текст, а рендереру — `view`, то есть обе аудитории получают своё
-([gofastmcp.com/apps/prefab](https://gofastmcp.com/apps/prefab), «Giving the
-LLM context»).
+Замер на живом сервере (`tools/call` по JSON-RPC): длина ответа ÷ длина текста —
+**1.04×** для `vacancy` и `company`, 1.24× для `search` (это JSON-обёртка),
+`structuredContent` отсутствует.
+
+| Имя | Параметры | Модель получает (`content`) |
+|-----|-----------|----------------------------|
+| `vacancy` | `id: int` (строго положительный) | Markdown страницы вакансии hh.ru (timeout 30 с, макс. 120 000 символов) |
+| `company` | `id: int` (строго положительный) | Markdown страницы компании hh.ru |
+| `search` | `text: str`, `page: int = 0` | «Найдено N вакансий (страница P): …» — список ID |
+| `version` | — | JSON одной строкой: `version`, `commit`, `build`, `python`, `fastmcp` |
+
+**Версия сборки**: `FastMCP("hh-mcp", version=BUILD_ID)` публикует значение в
+стандартном поле `serverInfo.version` ответа `initialize` — его читает любой
+MCP-клиент. Тулза `version` даёт то же плюс детали. Версия живёт в
+`[project].version` (`pyproject.toml`) и поднимается с каждым коммитом; локально
+`BUILD_ID` выглядит как `0.2.0+113e522` (версия + короткий коммит), на деплое —
+просто `0.2.0`, потому что `.git` в артефакте нет.
 
 **Валидация**: `id <= 0` → `ToolError("Invalid ID: …")` до HTTP-запроса.
 **Ошибки fetch** маппятся в `ToolError` (см. `_tool_error()` в
@@ -240,7 +257,7 @@ http://127.0.0.1:8000/mcp
 Чтобы одна и та же запись (вакансия / работодатель) не читалась с hh.ru
 повторно, в [`server.py`](server.py) подключён штатный
 `ResponseCachingMiddleware` с файловым хранилищем `FileTreeStore`
-(`py-key-value-aio`, уже установлен через `fastmcp[apps]` — Redis не нужен):
+(`py-key-value-aio`, уже в зависимостях fastmcp — Redis не нужен):
 
 - **Кешируются** только успешные ответы `vacancy` / `company` (`search`
   исключён: выдача меняется от страницы к странице)
@@ -328,8 +345,13 @@ Horizon читает [`fastmcp.json`](fastmcp.json) и считает его **�
 uv run pytest tests/ -v
 ```
 
-**377 тестов**, все passed. Покрытие:
-- `test_mcp_app.py` — инструменты, валидация, error mapping, UI-entry;
+**406 тестов**, все passed. Покрытие:
+- `test_mcp_app.py` — инструменты, валидация, error mapping, контракт «одна
+  копия данных в ответе», отсутствие UI-meta;
+- `test_version.py` — версия из метаданных пакета, коммит, `BUILD_ID`,
+  `runtime_info`;
+- `test_fastmcp_json.py` — конфиг деплоя: транспорт, `log_level` не `DEBUG`,
+  `environment.project`, entrypoint;
 - `test_caching.py` — файловый кеш: повторный id не дёргает fetch; флаг
   `HH_MCP_CACHE=0`;
 - `test_enrich.py` — обогащение employer-карточки;
@@ -376,9 +398,9 @@ uv run pytest tests/ -v
 ### Жизненный цикл запроса
 
 ```
-MCP Client / LLM / Apps UI → FastMCP (streamable HTTP / stdio)
+MCP Client / LLM → FastMCP (streamable HTTP / stdio)
      ↓
-Tool fn (vacancy / company / search)  → ToolResult
+Tool fn (vacancy / company / search / version)  → ToolResult{content}
      ↓
 fetch_as_markdown(url, timeout=30, max_chars=120_000)
      ↓
@@ -386,9 +408,9 @@ guards.py (SSRF) → transport.py (httpx2, HTTP2) → html.py (Sanitizer + Noise
      ↓
 links.py (resolve_relative_links) → converter.py (MarkItDown)
      ↓
-ToolResult{content: текст для модели, structured_content: Prefab view для UI}
+ToolResult{content: данные ровно один раз, без UI-копии}
      ↓
-MCP Client / Apps UI
+MCP Client (1.04× к длине текста)
 ```
 
 ### Dev-режим (нативный `fastmcp dev apps fastmcp.json`)

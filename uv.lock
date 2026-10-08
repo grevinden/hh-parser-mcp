@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.14"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -441,11 +441,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/49/0c/6c97f76e4ca6cd26fe056d6668ec4a550b2368d3699e6a50789aed226849/fastmcp-4.0.11-py3-none-any.whl", hash = "sha256:defbc5f2566a702f45817d1acead120dfa8127d60b1c1512b3200232ead13a44", size = 8161, upload-time = "2026-10-04T16:58:08.278Z" },
 ]
 
-[package.optional-dependencies]
-apps = [
-    { name = "fastmcp-slim", extra = ["apps"] },
-]
-
 [[package]]
 name = "fastmcp-slim"
 version = "4.0.11"
@@ -465,9 +460,6 @@ wheels = [
 ]
 
 [package.optional-dependencies]
-apps = [
-    { name = "prefab-ui" },
-]
 client = [
     { name = "authlib" },
     { name = "exceptiongroup" },
@@ -542,13 +534,12 @@ wheels = [
 
 [[package]]
 name = "hh-mcp"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
-    { name = "fastmcp", extra = ["apps"] },
+    { name = "fastmcp" },
     { name = "httpx2", extra = ["http2"] },
     { name = "markitdown" },
-    { name = "prefab-ui" },
     { name = "upstash-search" },
 ]
 
@@ -559,10 +550,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastmcp", extras = ["apps"], specifier = ">=4.0.11" },
+    { name = "fastmcp", specifier = ">=4.0.11" },
     { name = "httpx2", extras = ["http2"], specifier = ">=0.0.1" },
     { name = "markitdown", specifier = ">=0.1" },
-    { name = "prefab-ui", specifier = ">=0.20.2" },
     { name = "upstash-search", specifier = ">=0.1.1" },
 ]
 
@@ -1065,20 +1055,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe6ef3fa267035b518369d9511ffab804f839851d2779/pluggy-1.6.0.tar.gz", hash = "sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3", size = 69412, upload-time = "2025-05-15T12:30:07.975Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
-]
-
-[[package]]
-name = "prefab-ui"
-version = "0.20.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cyclopts" },
-    { name = "pydantic" },
-    { name = "rich" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/41/99/4e61eb3d3f8b09bdaa28bda3c99971264555f486a485333cb8e6f56c7d8c/prefab_ui-0.20.2.tar.gz", hash = "sha256:4ac17ebf8ec1c5a918a188625837fc608157907430a59c4feb8adac80e01262b", size = 4118979, upload-time = "2026-06-03T02:13:49.312Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/4a/d0/59b697dd5a44e632fcc4aba42ff5f88224df672ffea1f5e9a5a9e9e50698/prefab_ui-0.20.2-py3-none-any.whl", hash = "sha256:861d4914e4d9120996b4d5c6753788beeca433754d7bb3cfbd13f9dba7ea8e85", size = 1852274, upload-time = "2026-06-03T02:13:47.539Z" },
 ]
 
 [[package]]

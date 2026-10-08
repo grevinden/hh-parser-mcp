@@ -2,7 +2,7 @@
   "$schema": "https://gofastmcp.com/public/schemas/fastmcp.json/v1.json",
   "deployment": {
     "transport": "http",
-    "log_level": "DEBUG"
+    "log_level": "INFO"
   },
   "source": {
     "type": "filesystem",

@@ -1,27 +1,29 @@
 """hh-mcp tools — hh.ru vacancies and companies.
 
-Three tools (:func:`vacancy`, :func:`company`, :func:`search`) are registered
-with ``app=PrefabAppConfig(visibility=["app", "model"])``. That single
-declaration makes each tool visible to the model *and* to the Apps UI: fastmcp
-synthesizes the Prefab renderer resource and the browser picker builds the
-input form from the tool's own JSON schema.
+Four text tools: :func:`vacancy`, :func:`company`, :func:`search` and
+:func:`version`.
 
-Each tool returns :class:`ToolResult` — the documented way to serve both
-audiences at once (gofastmcp.com/apps/prefab, "Giving the LLM context"):
-``content`` is the text the model reasons about, ``structured_content`` is
-the Prefab view the browser renders.
+Every tool returns :class:`ToolResult` with ``content`` and nothing else, so
+the response carries the payload exactly once. That is deliberate: a
+``-> str`` return would make fastmcp mirror the text into
+``structuredContent.result`` (the "wrap-result" behaviour), and a Prefab view
+would embed the same text a second time — a client walking twenty vacancy IDs
+would then pay for forty pages. See ``docs/apps_mode.md`` for the full
+reasoning and for how to bring the browser UI back.
+
+``version`` is not hh.ru data: it reports which build is running so a
+deployment can be verified against the commit that was pushed.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from urllib.parse import quote_plus
 
 from fastmcp import FastMCP
-from fastmcp.apps import PrefabAppConfig
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import ToolResult
-from prefab_ui.components import Column, DataTable, DataTableColumn, Markdown, Muted
 
 from hh_mcp.fetch import (
     ConversionError,
@@ -37,12 +39,14 @@ from hh_mcp.fetch import (
     fetch_page,
 )
 from hh_mcp.search_index import index_hh_page
+from hh_mcp.version import BUILD_ID, runtime_info
 
 __all__ = [
     "mcp",
     "vacancy",
     "company",
     "search",
+    "version",
 ]
 
 # --- Configuration ---------------------------------------------------------
@@ -63,12 +67,11 @@ as a lone ``# HeadHunter`` title. Passing it off as the vacancy would be a silen
 lie, so the tool reports a fetch failure instead.
 """
 
-UI_CONFIG: PrefabAppConfig = PrefabAppConfig(visibility=["app", "model"])
-"""Renders the tool in the Apps UI and keeps it visible to the model."""
-
 # --- Application -----------------------------------------------------------
 
-mcp: FastMCP = FastMCP("hh-mcp")
+# ``version`` is the standard MCP handshake field: every client learns which
+# build it is talking to without calling a tool.
+mcp: FastMCP = FastMCP("hh-mcp", version=BUILD_ID)
 
 VACANCY_ID_RE = re.compile(
     r'data-qa="serp-item__title"[^>]*href="[^"]*/vacancy/(\d+)', re.M
@@ -178,7 +181,7 @@ def _fetch_markdown(url: str, *, doc_type: str | None = None, doc_id: int | None
 # --- Tools -----------------------------------------------------------------
 
 
-@mcp.tool(app=UI_CONFIG)
+@mcp.tool
 def vacancy(id: int) -> ToolResult:
     """Fetch an hh.ru vacancy page as Markdown.
 
@@ -191,8 +194,7 @@ def vacancy(id: int) -> ToolResult:
     Returns
     -------
     ToolResult
-        ``content`` is the page in Markdown; ``structured_content`` renders
-        the same text in the browser.
+        ``content`` is the page in Markdown — once, with no UI copy.
 
     Raises
     ------
@@ -205,13 +207,10 @@ def vacancy(id: int) -> ToolResult:
         f"https://hh.ru/vacancy/{id}", doc_type="vacancy", doc_id=id
     )
 
-    with Column(gap=4, css_class="p-6 max-w-4xl mx-auto") as view:
-        Markdown(md)
-
-    return ToolResult(content=md, structured_content=view)
+    return ToolResult(content=md)
 
 
-@mcp.tool(app=UI_CONFIG)
+@mcp.tool
 def company(id: int) -> ToolResult:
     """Fetch an hh.ru company (employer) page as Markdown.
 
@@ -224,8 +223,7 @@ def company(id: int) -> ToolResult:
     Returns
     -------
     ToolResult
-        ``content`` is the page in Markdown; ``structured_content`` renders
-        the same text in the browser.
+        ``content`` is the page in Markdown — once, with no UI copy.
 
     Raises
     ------
@@ -238,13 +236,10 @@ def company(id: int) -> ToolResult:
         f"https://hh.ru/employer/{id}", doc_type="employer", doc_id=id
     )
 
-    with Column(gap=4, css_class="p-6 max-w-4xl mx-auto") as view:
-        Markdown(md)
-
-    return ToolResult(content=md, structured_content=view)
+    return ToolResult(content=md)
 
 
-@mcp.tool(app=UI_CONFIG)
+@mcp.tool
 def search(text: str, page: int = 0) -> ToolResult:
     """Search hh.ru vacancies and return a flat list of vacancy IDs.
 
@@ -259,8 +254,7 @@ def search(text: str, page: int = 0) -> ToolResult:
     Returns
     -------
     ToolResult
-        ``content`` lists the vacancy IDs; ``structured_content`` renders them
-        as a sortable table.
+        ``content`` lists the vacancy IDs — once, with no UI copy.
     """
     if not isinstance(text, str) or not text.strip():
         raise ToolError("Invalid text: non-empty string required")
@@ -292,19 +286,24 @@ def search(text: str, page: int = 0) -> ToolResult:
     if ids:
         joined = ", ".join(str(i) for i in ids)
         summary = f"Найдено {len(ids)} вакансий (страница {page}): {joined}"
-        # The view shows the IDs in the table, so its heading carries the count
-        # only — repeating the list here would put every ID in the tool result
-        # three times (content + heading + row) instead of two.
-        heading = f"Найдено {len(ids)} вакансий (страница {page})"
     else:
-        summary = heading = f"Ничего не найдено (страница {page})."
+        summary = f"Ничего не найдено (страница {page})."
 
-    with Column(gap=4, css_class="p-6 max-w-4xl mx-auto") as view:
-        Muted(heading)
-        DataTable(
-            columns=[DataTableColumn(key="id", header="Vacancy ID", sortable=True)],
-            rows=[{"id": i} for i in ids],
-            search=True,
-        )
+    return ToolResult(content=summary)
 
-    return ToolResult(content=summary, structured_content=view)
+
+@mcp.tool
+def version() -> ToolResult:
+    """Report the running build: version, commit and runtime facts.
+
+    Exists so a deployment can be verified: after a push the host redeploys on
+    its own, and this tool is the cheapest way to tell which commit is actually
+    serving traffic. The same value is published as ``serverInfo.version`` in
+    the MCP handshake, so clients that never call tools can read it too.
+
+    Returns
+    -------
+    ToolResult
+        ``content`` is a one-line JSON object with the build facts.
+    """
+    return ToolResult(content=json.dumps(runtime_info(), ensure_ascii=False))
