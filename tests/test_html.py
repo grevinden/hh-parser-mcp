@@ -161,8 +161,13 @@ class TestSanitizer:
         # The description is content, not noise.
         assert "Описание компании" in result.html
 
-    def test_sidebar_company_site_dropped(self, sanitizer: Sanitizer) -> None:
-        """The separate "Сайт" card in the right column is dropped."""
+    def test_sidebar_company_site_kept(self, sanitizer: Sanitizer) -> None:
+        """The employer's website card is content: the link survives.
+
+        The caption span is a fact-cell label handled by the orphan rule
+        (:func:`test_orphan_fact_caption_dropped`), but the URL itself
+        must stay in the output — callers want the employer's website.
+        """
         html = (
             "<main>"
             '<div data-qa="sidebar-company-site">'
@@ -173,9 +178,7 @@ class TestSanitizer:
             "</main>"
         )
         result = sanitizer.sanitize(html)
-        assert "sidebar-company-site" not in result.html
-        assert "https://example.ru" not in result.html
-        assert "Сайт" not in result.html
+        assert "https://example.ru" in result.html
         assert "Описание" in result.html
 
     def test_competitor_companies_widget_dropped(self, sanitizer: Sanitizer) -> None:

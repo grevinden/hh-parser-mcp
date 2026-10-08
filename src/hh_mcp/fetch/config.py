@@ -161,11 +161,14 @@ ORPHAN_FACT_LABELS: frozenset[str] = frozenset(
 #: (matched case-insensitively). These are layout artifacts (separator
 #: glyphs, widget scaffolding) that survive class-based filtering.
 #:
-#: ``employer-page-company-info`` / ``sidebar-company-site``: the
-#: employer-page fact cards in the right column — "Город" / "Сферы
-#: деятельности" / "Тип регистрации" (``data-qa="company-info-*"`` cells)
-#: and the separate website card ("Сайт").  The description proper lives
+#: ``employer-page-company-info``: the employer-page fact cards in the
+#: right column — "Город" / "Сферы деятельности" / "Тип регистрации"
+#: (``data-qa="company-info-*"`` cells).  The description proper lives
 #: in a separate ``div.g-user-content`` block, which is kept.
+#:
+#: NOTE: ``sidebar-company-site`` (the employer's website card) is NOT
+#: noise: the website is content the caller explicitly wants in the
+#: Markdown, so the card survives and yields an external link.
 #:
 #: ``competitor-companies-*`` / ``branded-employer-gallery``: the
 #: "Ещё компании для вас" recommendation widget on employer pages — its
@@ -179,7 +182,6 @@ NOISE_DATA_QA: frozenset[str] = frozenset(
     {
         "employer-page-reviews-badges-separator",
         "employer-page-company-info",
-        "sidebar-company-site",
         "competitor-companies-title",
         "competitor-companies-hint-activator",
         "branded-employer-gallery",

@@ -143,9 +143,9 @@ class TestNoisePolicy:
         "data_qa",
         [
             # Right-column fact cards on employer pages ("Город" /
-            # "Сферы деятельности" / "Тип регистрации") and the "Сайт" card.
+            # "Сферы деятельности" / "Тип регистрации").  The website card
+            # ("sidebar-company-site") is content, not noise.
             "employer-page-company-info",
-            "sidebar-company-site",
             # "Ещё компании для вас" recommendation widget.
             "competitor-companies-title",
             "competitor-companies-hint-activator",
