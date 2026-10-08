@@ -18,6 +18,7 @@ deployment can be verified against the commit that was pushed.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from urllib.parse import quote_plus
 
@@ -38,7 +39,7 @@ from hh_mcp.fetch import (
     fetch_as_markdown,
     fetch_page,
 )
-from hh_mcp.search_index import index_hh_page
+from hh_mcp.search_index import index_hh_page, read_page, search_ttl_s
 from hh_mcp.version import BUILD_ID, runtime_info
 
 __all__ = [
@@ -66,6 +67,10 @@ only an embedded JSON state dump. The sanitizer strips that and Markdown ends up
 as a lone ``# HeadHunter`` title. Passing it off as the vacancy would be a silent
 lie, so the tool reports a fetch failure instead.
 """
+
+# --- Logging ----------------------------------------------------------------
+
+logger = logging.getLogger("hh_mcp.app")
 
 # --- Application -----------------------------------------------------------
 
@@ -159,10 +164,22 @@ def _fetch_markdown(url: str, *, doc_type: str | None = None, doc_id: int | None
     ToolError
         On any fetch failure — see :func:`_tool_error` for the mapping.
     """
+    # Cache tiers, cheapest first: the disk cache is already consulted by the
+    # response-caching middleware (a hit never reaches this function), so what
+    # is left is the search database, and only then hh.ru itself.
+    if doc_type is not None and doc_id is not None:
+        stored = read_page(doc_type=doc_type, doc_id=doc_id, max_age_s=search_ttl_s())
+        if stored is not None and len(_markdown_body(stored)) >= MIN_CONTENT_CHARS:
+            logger.info("page served from db tier: url=%s", url)
+            return stored
+        logger.info("page not in db tier, going to hh.ru: url=%s", url)
+
     try:
         md = fetch_as_markdown(url, timeout=TIMEOUT_S, max_chars=MAX_CHARS)
     except (SSRError, InvalidURLError, FetchError) as exc:
         raise _tool_error(exc) from None
+
+    logger.info("page fetched from hh.ru: url=%s bytes=%d", url, len(md))
 
     if len(_markdown_body(md)) < MIN_CONTENT_CHARS:
         raise ToolError(

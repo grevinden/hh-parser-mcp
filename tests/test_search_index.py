@@ -8,7 +8,7 @@ for the semantic search, and nothing else.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -17,6 +17,11 @@ from hh_mcp import search_index
 from hh_mcp.search_index import document_id, index_hh_page
 
 MD = "# Ведущий программист 1С\n\nОпыт с 1С, удалённо."
+
+
+def _ago(seconds: float) -> str:
+    """Return an ISO 8601 timestamp *seconds* in the past."""
+    return (datetime.now(UTC) - timedelta(seconds=seconds)).isoformat()
 
 
 class FakeIndex:
@@ -98,6 +103,12 @@ class TestDocumentShape:
     def test_writes_single_document(self, wired: FakeIndex):
         index_hh_page(doc_type="vacancy", doc_id=38185674, md=MD)
         assert len(wired.upserted) == 1
+
+    def test_write_is_logged(self, wired: FakeIndex, caplog):
+        with caplog.at_level("INFO", logger="hh_mcp.search_index"):
+            index_hh_page(doc_type="vacancy", doc_id=38185674, md=MD)
+        assert "db cache write" in caplog.text
+        assert "vacancy/38185674" in caplog.text
 
     def test_id_is_the_url_path(self, wired: FakeIndex):
         index_hh_page(doc_type="vacancy", doc_id=38185674, md=MD)
@@ -221,6 +232,119 @@ class TestConfigured:
         monkeypatch.delenv("UPSTASH_SEARCH_REST_URL", raising=False)
         monkeypatch.delenv("UPSTASH_SEARCH_REST_TOKEN", raising=False)
         assert search_index.configured() is False
+
+
+class FakeDocument:
+    """Stand-in for an ``upstash_search`` document."""
+
+    def __init__(self, text: str, fetched_at: str | None) -> None:
+        self.id = "vacancy/38185674"
+        self.content = {"text": text} if text else {}
+        self.metadata = {"fetched_at": fetched_at} if fetched_at else None
+
+
+class TestReadPage:
+    """The database doubles as the second cache tier, read by id."""
+
+    def _client_returning(self, documents):
+        class Doc:
+            def fetch(self, *, ids):
+                return list(documents)
+
+        class Client:
+            def index(self, _name):
+                return Doc()
+
+        return Client()
+
+    def _wire(self, monkeypatch, documents):
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "https://example.invalid")
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", "token")
+        monkeypatch.setattr(
+            search_index, "_build_client", lambda: self._client_returning(documents)
+        )
+
+    def test_fresh_document_is_returned(self, monkeypatch):
+        self._wire(monkeypatch, [FakeDocument(MD, _ago(60))])
+        assert search_index.read_page(doc_type="vacancy", doc_id=38185674) == MD
+
+    def test_stale_document_is_rejected(self, monkeypatch):
+        self._wire(monkeypatch, [FakeDocument(MD, _ago(10_000))])
+        assert (
+            search_index.read_page(doc_type="vacancy", doc_id=38185674, max_age_s=3600)
+            is None
+        )
+
+    def test_missing_document_is_none(self, monkeypatch):
+        self._wire(monkeypatch, [None])
+        assert search_index.read_page(doc_type="vacancy", doc_id=1) is None
+
+    def test_empty_document_is_none(self, monkeypatch):
+        self._wire(monkeypatch, [FakeDocument("", _ago(10))])
+        assert search_index.read_page(doc_type="vacancy", doc_id=1) is None
+
+    def test_unreadable_timestamp_counts_as_stale(self, monkeypatch):
+        """Freshness has to be provable, not assumed."""
+        self._wire(monkeypatch, [FakeDocument(MD, None)])
+        assert (
+            search_index.read_page(doc_type="vacancy", doc_id=1, max_age_s=3600)
+            is None
+        )
+
+    def test_null_in_the_middle_is_skipped(self, monkeypatch):
+        self._wire(monkeypatch, [None, FakeDocument(MD, _ago(5))])
+        assert search_index.read_page(doc_type="vacancy", doc_id=1) == MD
+
+    def test_backend_unavailable_is_none(self, monkeypatch):
+        monkeypatch.delenv("UPSTASH_SEARCH_REST_URL", raising=False)
+        monkeypatch.delenv("UPSTASH_SEARCH_REST_TOKEN", raising=False)
+        assert search_index.read_page(doc_type="vacancy", doc_id=1) is None
+
+    def test_read_error_is_remembered_and_swallowed(self, monkeypatch):
+        class Broken:
+            def index(self, _name):
+                raise RuntimeError("connection reset")
+
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "https://example.invalid")
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", "token")
+        monkeypatch.setattr(search_index, "_build_client", lambda: Broken())
+        assert search_index.read_page(doc_type="vacancy", doc_id=1) is None
+        assert "connection reset" in search_index.last_error()
+
+    def test_hit_is_logged(self, monkeypatch, caplog):
+        self._wire(monkeypatch, [FakeDocument(MD, _ago(30))])
+        with caplog.at_level("INFO", logger="hh_mcp.search_index"):
+            search_index.read_page(doc_type="vacancy", doc_id=38185674)
+        assert "db cache hit" in caplog.text
+        assert "vacancy/38185674" in caplog.text
+
+    def test_miss_is_logged(self, monkeypatch, caplog):
+        self._wire(monkeypatch, [None])
+        with caplog.at_level("INFO", logger="hh_mcp.search_index"):
+            search_index.read_page(doc_type="vacancy", doc_id=1)
+        assert "db cache miss" in caplog.text
+
+
+class TestSearchTtl:
+    """``HH_MCP_SEARCH_TTL_S`` decides how long a document may answer."""
+
+    def test_default(self, monkeypatch):
+        monkeypatch.delenv("HH_MCP_SEARCH_TTL_S", raising=False)
+        assert search_index.search_ttl_s() == search_index.DEFAULT_TTL_S
+
+    def test_from_environment(self, monkeypatch):
+        monkeypatch.setenv("HH_MCP_SEARCH_TTL_S", "600")
+        assert search_index.search_ttl_s() == 600
+
+    def test_negative_is_clamped(self, monkeypatch):
+        monkeypatch.setenv("HH_MCP_SEARCH_TTL_S", "-5")
+        assert search_index.search_ttl_s() == 0
+
+    def test_garbage_falls_back_to_default(self, monkeypatch, caplog):
+        monkeypatch.setenv("HH_MCP_SEARCH_TTL_S", "soon")
+        with caplog.at_level("WARNING", logger="hh_mcp.search_index"):
+            assert search_index.search_ttl_s() == search_index.DEFAULT_TTL_S
+        assert "not a number" in caplog.text
 
 
 class TestBestEffort:

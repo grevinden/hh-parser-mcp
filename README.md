@@ -41,7 +41,7 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
   `company` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
   (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`;
   отключается флагом `HH_MCP_CACHE=0`).
-- **442 тестов** — `uv run pytest tests/ -v` (app, версия, конфиг деплоя,
+- **479 тестов** — `uv run pytest tests/ -v` (app, версия, конфиг деплоя,
   семантический индекс, fetch-модуль, guards, html, links, converter,
   orchestrator, transport, config, errors, enrich, caching).
 
@@ -252,34 +252,71 @@ http://127.0.0.1:8000/mcp
 
 ---
 
-## Кеширование ответов
+## Кеширование ответов: два уровня
 
-Чтобы одна и та же запись (вакансия / работодатель) не читалась с hh.ru
-повторно, в [`server.py`](server.py) подключён штатный
-`ResponseCachingMiddleware` с файловым хранилищем `FileTreeStore`
-(`py-key-value-aio`, уже в зависимостях fastmcp — Redis не нужен):
+Страница (вакансия / работодатель) берётся из первого уровня, который её
+знает: **диск → база → сайт**.
 
-- **Кешируются** только успешные ответы `vacancy` / `company` (`search`
-  исключён: выдача меняется от страницы к странице)
-  (`CACHED_TOOLS` в `server.py`); ошибки и остальные инструменты не кешируются.
-- **Ключ кеша** — `авторизация : версия : имя инструмента : аргументы`:
-  вызов `vacancy {"id": 138156968}` всегда даёт один и тот же ключ.
-- **TTL** — 1 час (`CACHE_TTL_S`); по истечении следующий вызов снова
-  уходит на hh.ru.
-- **Каталог кеша** — `~/.cache/hh-mcp` по умолчанию; переопределяется
-  переменной окружения `HH_MCP_CACHE_DIR`. Кеш переживает рестарт сервера
-  (файлы на диске).
-- **Отключение** — `HH_MCP_CACHE=0` (также `off` / `false` / `no`): middleware
-  не подключается вовсе, каталог кеша не создаётся и каждый вызов идёт на
-  hh.ru. Полезно при отладке, когда нужен свежий ответ.
+| Уровень | Где | Ключ | TTL | Отключение |
+|---|---|---|---|---|
+| 1. Диск | `~/.cache/hh-mcp` | инструмент + аргументы | 1 час | `HH_MCP_CACHE=0` |
+| 2. База | Upstash Search документ | `vacancy/38185674` | 24 часа | нет `UPSTASH_SEARCH_*` |
+| 3. Сайт | hh.ru | — | — | всегда |
+
+**Уровень 1 — диск.** Штатный `ResponseCachingMiddleware` с файловым хранилищем
+`FileTreeStore` (`server.py`). Кешируются только успешные ответы `vacancy` /
+`company` (`search` исключён: выдача меняется от страницы к странице). Каталог
+по умолчанию `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`, кеш
+переживает рестарт сервера. `HH_MCP_CACHE=0` (также `off` / `false` / `no`)
+отключает middleware вовсе.
+
+**Уровень 2 — база.** Те же документы Upstash Search, что и для семантики,
+читаются по идентификатору (`fetch(ids=["vacancy/38185674"])`). Свежесть
+проверяется по записанному `fetched_at`: старый документ пропускается, и
+непроверяемый (без метки) тоже — свежесть должна быть доказуемой. TTL задаётся
+`HH_MCP_SEARCH_TTL_S` (по умолчанию `86400` секунд).
+
+**Порядок чтения** виден в логе — каждая строка говорит, кто ответил:
+
+```
+INFO: disk cache miss: key=dba9f90f…
+INFO: db cache hit: id=employer/671766 bytes=2129 age=54s
+INFO: page served from db tier: url=https://hh.ru/employer/671766
+INFO: disk cache write: key=dba9f90f… bytes=2214 ttl=3600
+```
+
+При промахе обоих уровней:
+
+```
+INFO: disk cache miss: key=80f5072a…
+INFO: db cache miss: id=employer/2163044 no document
+INFO: page not in db tier, going to hh.ru: url=https://hh.ru/employer/2163044
+INFO: page fetched from hh.ru: url=https://hh.ru/employer/2163044 bytes=3027
+INFO: db cache write: id=employer/2163044 bytes=3027
+INFO: disk cache write: key=80f5072a… bytes=3112 ttl=3600
+```
+
+Текст страницы в лог не попадает — только идентификатор и размер.
 
 ```bash
-# Пример: другой каталог кеша
+# Пример: другой каталог дискового кеша
 HH_MCP_CACHE_DIR=/var/cache/hh-mcp uv run fastmcp run
 
-# Пример: без кеша (каждый вызов читает hh.ru)
+# Пример: без дискового кеша (но с базой)
 HH_MCP_CACHE=0 uv run fastmcp run
+
+# Пример: документ из базы живёт всего час
+HH_MCP_SEARCH_TTL_S=3600 uv run fastmcp run
 ```
+
+### Логи
+
+Сообщения пишутся в stderr на уровне из `log_level` в `fastmcp.json`
+(`INFO` — по умолчанию). Их видимость настраивает точка входа:
+`fastmcp` конфигурирует только свой логгер и отключает проброс, поэтому
+`server._configure_logging()` поднимает обработчик для пространства имён
+`hh_mcp` — иначе записи о кеше ушли бы в корневой логгер без хендлера и
+пропали бы. Локальная отладка: `fastmcp run --log-level DEBUG`.
 
 > Каталог кеша удаляйте **только при остановленном сервере**: живой
 > `FileTreeStore` держит открытые дескрипторы и без каталога падает с
@@ -312,7 +349,9 @@ HH_MCP_CACHE=0 uv run fastmcp run
 
 Настройка — переменные окружения `UPSTASH_SEARCH_REST_URL`,
 `UPSTASH_SEARCH_REST_TOKEN`, `UPSTASH_SEARCH_INDEX` (по умолчанию `hh_mcp`).
-Кеш-хиты не индексируются: запись идёт только после реального чтения hh.ru.
+URL обязательно **со схемой** (`https://…upstash.io`) — без неё httpx падает с
+`UnsupportedProtocol`. Страница, пришедшая из базы, повторно не индексируется:
+запись идёт только после реального чтения hh.ru.
 
 > Переменные нужно задать **в окружении развёрнутого сервера**. `fastmcp.json`
 > их не задаёт: Horizon игнорирует `deployment.env`, а `.env` из репозитория на
@@ -397,7 +436,7 @@ Horizon читает [`fastmcp.json`](fastmcp.json) и считает его **�
 uv run pytest tests/ -v
 ```
 
-**442 тестов**, все passed. Покрытие:
+**479 тестов**, все passed. Покрытие:
 - `test_mcp_app.py` — инструменты, валидация, error mapping, контракт «одна
   копия данных в ответе», отсутствие UI-meta;
 - `test_version.py` — версия из метаданных пакета, коммит, `BUILD_ID`,
@@ -409,6 +448,9 @@ uv run pytest tests/ -v
 - `test_indexing_guard.py` — индексация только при реальном fetch; тесты не
   пишут в живой индекс (`tests/conftest.py` подменяет вызов и чистит
   `UPSTASH_SEARCH_*` из окружения);
+- `test_cache_tiers.py` — порядок «диск → база → сайт» и логи каждого шага;
+- `test_disk_cache_logging.py` — `LoggingFileTreeStore`: hit/miss/write в лог,
+  размер вместо содержимого;
 - `test_caching.py` — файловый кеш: повторный id не дёргает fetch; флаг
   `HH_MCP_CACHE=0`;
 - `test_enrich.py` — обогащение employer-карточки;

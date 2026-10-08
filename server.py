@@ -39,7 +39,9 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from fastmcp.server.middleware.caching import ResponseCachingMiddleware
 from key_value.aio.stores.filetree import (
@@ -50,7 +52,7 @@ from key_value.aio.stores.filetree import (
 
 from hh_mcp.app import mcp
 
-__all__ = ["mcp"]
+__all__ = ["LoggingFileTreeStore", "mcp"]
 
 # --- Response cache ---------------------------------------------------------
 
@@ -74,6 +76,123 @@ CACHE_OFF_VALUES: frozenset[str] = frozenset({"0", "off", "false", "no"})
 """Values of ``HH_MCP_CACHE`` that turn the response cache off."""
 
 
+def _configure_logging() -> None:
+    """Send ``hh_mcp`` log records to stderr, the way fastmcp does its own.
+
+    ``fastmcp.utilities.logging.configure_logging`` configures the ``fastmcp``
+    logger only and stops propagation, so records from ``hh_mcp.*`` would reach
+    a root logger with no handler and disappear — a cache decision nobody can
+    see. The entry point configures logging for its own namespace and takes the
+    level from the launcher's settings, so ``log_level`` in ``fastmcp.json``
+    governs our lines too.
+    """
+    import fastmcp
+
+    namespace = logging.getLogger("hh_mcp")
+    level = getattr(fastmcp.settings, "log_level", logging.INFO)
+    if isinstance(level, str):
+        level = getattr(logging, level.upper(), logging.INFO)
+    namespace.setLevel(level)
+    if not namespace.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+        namespace.addHandler(handler)
+    namespace.propagate = False
+
+
+def _approx_bytes(value: Any) -> int:
+    """Return a cheap size estimate for log lines, without serializing.
+
+    Parameters
+    ----------
+    value:
+        Arbitrary nested structure — the cached response is a mapping of
+        content blocks, whose payload can be tens of kilobytes.
+
+    Returns
+    -------
+    int
+        Sum of the string lengths of every leaf, plus mapping keys.
+    """
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, Mapping):
+        return sum(len(str(key)) + _approx_bytes(item) for key, item in value.items())
+    if isinstance(value, (list, tuple)):
+        return sum(_approx_bytes(item) for item in value)
+    return len(str(value))
+
+
+class LoggingFileTreeStore(FileTreeStore):
+    """File-backed store that logs every read, miss and write.
+
+    ``ResponseCachingMiddleware`` decides *when* the store is consulted; this
+    subclass only makes those decisions visible, so a log shows which tier
+    answered: the disk cache here, the search database in
+    :mod:`hh_mcp.search_index`, or hh.ru itself. Values are reported by size
+    only — never their content, which is a whole vacancy page.
+    """
+
+    def __init__(self, *, logger: logging.Logger, **kwargs: Any) -> None:
+        """Build the store and remember where to log.
+
+        Parameters
+        ----------
+        logger:
+            Logger to write the cache decisions to.
+        **kwargs:
+            Forwarded verbatim to :class:`FileTreeStore`.
+        """
+        super().__init__(**kwargs)
+        self._logger = logger
+
+    async def get(self, key: str, **kwargs: Any) -> dict[str, Any] | None:
+        """Read one entry and log whether it was there.
+
+        Parameters
+        ----------
+        key:
+            Store key, as produced by the middleware.
+        **kwargs:
+            Forwarded verbatim to the base store.
+
+        Returns
+        -------
+        dict[str, Any] | None
+            The stored value, or ``None`` when the key is absent or expired.
+        """
+        value = await super().get(key, **kwargs)
+        if value is None:
+            self._logger.info("disk cache miss: key=%s", key)
+        else:
+            self._logger.info(
+                "disk cache hit: key=%s bytes=%d", key, _approx_bytes(value)
+            )
+        return value
+
+    async def put(
+        self, key: str, value: Mapping[str, Any], **kwargs: Any
+    ) -> None:
+        """Write one entry and log the write.
+
+        Parameters
+        ----------
+        key:
+            Store key, as produced by the middleware.
+        value:
+            Response to store.
+        **kwargs:
+            Forwarded verbatim to the base store.
+        """
+        await super().put(key, value, **kwargs)
+        self._logger.info(
+            "disk cache write: key=%s bytes=%d ttl=%s",
+            key,
+            _approx_bytes(value),
+            kwargs.get("ttl"),
+        )
+
+
 def cache_enabled() -> bool:
     """Return ``True`` unless ``HH_MCP_CACHE`` says otherwise.
 
@@ -89,12 +208,15 @@ def cache_enabled() -> bool:
     return raw.strip().casefold() not in CACHE_OFF_VALUES
 
 
+_configure_logging()
+
 if cache_enabled():
     # The sanitization strategies below inspect the directory (max filename
     # length), so it must exist before they are constructed.
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-    cache_store = FileTreeStore(
+    cache_store = LoggingFileTreeStore(
+        logger=logger,
         data_directory=CACHE_DIR,
         key_sanitization_strategy=FileTreeV1KeySanitizationStrategy(CACHE_DIR),
         collection_sanitization_strategy=FileTreeV1CollectionSanitizationStrategy(
@@ -112,7 +234,7 @@ if cache_enabled():
         )
     )
     logger.info(
-        "response cache enabled: dir=%s ttl=%ss tools=%s",
+        "response cache enabled: tier=disk dir=%s ttl=%ss tools=%s",
         CACHE_DIR,
         CACHE_TTL_S,
         ", ".join(CACHED_TOOLS),
