@@ -347,6 +347,144 @@ class TestSearchTtl:
         assert "not a number" in caplog.text
 
 
+class TestNormalizeUrl:
+    """The URL survives every way a human copies it between places."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            # What a deployment's environment editor stores: no scheme.
+            ("db-1.upstash.io", "https://db-1.upstash.io"),
+            # What the committed .env stores: wrapped in quotes.
+            ('"https://db-1.upstash.io"', "https://db-1.upstash.io"),
+            ("'https://db-1.upstash.io'", "https://db-1.upstash.io"),
+            # Both at once, which is what produced UnsupportedProtocol.
+            ('"db-1.upstash.io"', "https://db-1.upstash.io"),
+            # Quotes plus whitespace, plus a trailing slash.
+            ('  "https://db-1.upstash.io/"  ', "https://db-1.upstash.io"),
+            # A dropped slash, one character out.
+            ("https:/db-1.upstash.io", "https://db-1.upstash.io"),
+            # Already fine: unchanged.
+            ("https://db-1.upstash.io", "https://db-1.upstash.io"),
+            ("http://localhost:8080", "http://localhost:8080"),
+            # Scheme case is normalized so the URL is canonical.
+            ("HTTPS://DB-1.Upstash.IO", "https://DB-1.Upstash.IO"),
+        ],
+    )
+    def test_produces_an_absolute_url(self, raw, expected):
+        assert search_index.normalize_url(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["", "   ", '""', "''"])
+    def test_empty_stays_empty(self, raw):
+        assert search_index.normalize_url(raw) == ""
+
+    def test_result_is_usable_by_httpx(self):
+        """The client's failure mode is a scheme-less URL — assert there is none."""
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(search_index.normalize_url("db-1.upstash.io"))
+        assert parsed.scheme in {"http", "https"}
+        assert parsed.netloc == "db-1.upstash.io"
+
+
+class TestEndpoint:
+    """``endpoint`` is the host a deployment actually writes to."""
+
+    def test_host_only(self, monkeypatch):
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "https://db-1.upstash.io")
+        assert search_index.endpoint() == "db-1.upstash.io"
+
+    def test_normalized_host(self, monkeypatch):
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "db-1.upstash.io")
+        assert search_index.endpoint() == "db-1.upstash.io"
+
+    def test_port_is_kept(self, monkeypatch):
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "localhost:8080")
+        assert search_index.endpoint() == "localhost:8080"
+
+    def test_none_when_unset(self, monkeypatch):
+        monkeypatch.delenv("UPSTASH_SEARCH_REST_URL", raising=False)
+        assert search_index.endpoint() is None
+
+    def test_none_when_empty(self, monkeypatch):
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", '""')
+        assert search_index.endpoint() is None
+
+
+class TestClientUsesNormalizedUrl:
+    """The client must receive the repaired URL, not the raw environment value."""
+
+    def test_scheme_is_added_before_the_request(self, monkeypatch):
+        """Reproduces the deployment: no scheme in the environment variable."""
+        import upstash_search
+
+        seen: dict[str, str] = {}
+
+        class FakeSearch:
+            def __init__(self, *, url, token, **kwargs):
+                seen["url"] = url
+                seen["token"] = token
+
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "db-1.upstash.io")
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", "tok")
+        monkeypatch.setattr(upstash_search, "Search", FakeSearch)
+
+        client = search_index._build_client()
+        assert client is not None
+        assert seen["url"] == "https://db-1.upstash.io"
+        assert seen["token"] == "tok"
+
+    def test_quotes_are_stripped(self, monkeypatch):
+        import upstash_search
+
+        seen: dict[str, str] = {}
+
+        class FakeSearch:
+            def __init__(self, *, url, token, **kwargs):
+                seen["url"] = url
+                seen["token"] = token
+
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", '"https://db-1.upstash.io"')
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", '"tok"')
+        monkeypatch.setattr(upstash_search, "Search", FakeSearch)
+
+        assert search_index._build_client() is not None
+        assert seen["url"] == "https://db-1.upstash.io"
+        assert seen["token"] == "tok"
+
+    def test_a_repaired_url_is_reported(self, monkeypatch, caplog):
+        """A silent repair is how this failure hid for a day."""
+        import upstash_search
+
+        class FakeSearch:
+            def __init__(self, *, url, token, **kwargs):
+                self.url = url
+
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "db-1.upstash.io")
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", "tok")
+        monkeypatch.setattr(upstash_search, "Search", FakeSearch)
+
+        with caplog.at_level("WARNING", logger="hh_mcp.search_index"):
+            search_index._build_client()
+        assert "not a plain absolute URL" in caplog.text
+        assert "https://db-1.upstash.io" in caplog.text
+
+    def test_a_plain_url_is_not_warned_about(self, monkeypatch, caplog):
+        import upstash_search
+
+        class FakeSearch:
+            def __init__(self, *, url, token, **kwargs):
+                self.url = url
+
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "https://db-1.upstash.io")
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", "tok")
+        monkeypatch.setattr(upstash_search, "Search", FakeSearch)
+
+        with caplog.at_level("WARNING", logger="hh_mcp.search_index"):
+            search_index._build_client()
+        assert "not a plain absolute URL" not in caplog.text
+
+
 class TestBestEffort:
     """Indexing never breaks a tool call."""
 

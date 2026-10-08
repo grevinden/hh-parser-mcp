@@ -41,7 +41,7 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
   `company` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
   (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`;
   отключается флагом `HH_MCP_CACHE=0`).
-- **479 тестов** — `uv run pytest tests/ -v` (app, версия, конфиг деплоя,
+- **506 тестов** — `uv run pytest tests/ -v` (app, версия, конфиг деплоя,
   семантический индекс, fetch-модуль, guards, html, links, converter,
   orchestrator, transport, config, errors, enrich, caching).
 
@@ -213,7 +213,7 @@ uv run fastmcp call http://127.0.0.1:8000/mcp company id=11620617 --json
 | `vacancy` | `id: int` (строго положительный) | Markdown страницы вакансии hh.ru (timeout 30 с, макс. 120 000 символов) |
 | `company` | `id: int` (строго положительный) | Markdown страницы компании hh.ru |
 | `search` | `text: str`, `page: int = 0` | «Найдено N вакансий (страница P): …» — список ID |
-| `version` | — | JSON одной строкой: `version`, `commit`, `build`, `python`, `fastmcp`, `search`, `search_error` |
+| `version` | — | JSON одной строкой: `version`, `commit`, `build`, `python`, `fastmcp`, `search`, `search_endpoint`, `search_error` |
 
 **Версия сборки**: `FastMCP("hh-mcp", version=BUILD_ID)` публикует значение в
 стандартном поле `serverInfo.version` ответа `initialize` — его читает любой
@@ -349,9 +349,13 @@ HH_MCP_SEARCH_TTL_S=3600 uv run fastmcp run
 
 Настройка — переменные окружения `UPSTASH_SEARCH_REST_URL`,
 `UPSTASH_SEARCH_REST_TOKEN`, `UPSTASH_SEARCH_INDEX` (по умолчанию `hh_mcp`).
-URL обязательно **со схемой** (`https://…upstash.io`) — без неё httpx падает с
-`UnsupportedProtocol`. Страница, пришедшая из базы, повторно не индексируется:
-запись идёт только после реального чтения hh.ru.
+Значение URL нормализуется (`search_index.normalize_url`): подставляется
+`https://`, если схемы нет, снимаются кавычки и хвостовой слэш. Без этого httpx
+отвечает `UnsupportedProtocol` на первом же запросе — ошибка выглядит как
+«индекс не работает», хотя верен адрес. Что именно понял сервер, показывает
+`version()` → `search_endpoint` (только хост, без токена). Страница, пришедшая из
+базы, повторно не индексируется: запись идёт только после реального чтения
+hh.ru.
 
 > Переменные нужно задать **в окружении развёрнутого сервера**. `fastmcp.json`
 > их не задаёт: Horizon игнорирует `deployment.env`, а `.env` из репозитория на
@@ -372,6 +376,15 @@ URL обязательно **со схемой** (`https://…upstash.io`) — �
 «нет библиотеки» и «эндпоинт не отвечает», ничего не создавая. Если проба
 здорова, а записи всё равно нет, причина — в `search_error`: туда попадает и
 ошибка последней записи.
+
+Порядок диагностики при жалобе «в базу ничего не пишется»:
+
+1. `version()` → `search`: не `ready`, смотрим `search_error`;
+2. `search_endpoint` показывает хост, который сервер понял из окружения, —
+   сравнить с хостом, который задан на самом деле;
+3. в логах искать `db cache write:` для нужного `id` — если строки нет,
+   до базы дело не дошло; если `UnsupportedProtocol` — переменная окружения
+   исправляется в панели развёртывания, а не в коде.
 
 > Тесты никогда не пишут в живой индекс: `tests/conftest.py` подменяет вызов
 > на копилку и убирает `UPSTASH_SEARCH_*` из окружения.
@@ -436,7 +449,7 @@ Horizon читает [`fastmcp.json`](fastmcp.json) и считает его **�
 uv run pytest tests/ -v
 ```
 
-**479 тестов**, все passed. Покрытие:
+**506 тестов**, все passed. Покрытие:
 - `test_mcp_app.py` — инструменты, валидация, error mapping, контракт «одна
   копия данных в ответе», отсутствие UI-meta;
 - `test_version.py` — версия из метаданных пакета, коммит, `BUILD_ID`,

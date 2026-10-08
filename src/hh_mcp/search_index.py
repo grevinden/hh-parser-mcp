@@ -17,6 +17,11 @@ A document carries only what a search needs:
   hh.ru. Nothing else: the type is already the first segment of the id and the
   URL is derived from the id, so a copy of either could only ever disagree.
 
+The endpoint URL is normalized (:func:`normalize_url`) because a value copied
+between a shell, a ``.env`` file and a deployment's environment editor loses its
+scheme or arrives wrapped in quotes, and httpx then refuses it at request time —
+the reason a live deployment wrote nothing while its tools kept working.
+
 Indexing never breaks a tool call, but a swallowed failure is indistinguishable
 from a healthy server that simply had nothing to index — a deployment with no
 credentials looked fine while writing nothing. Failures are therefore recorded
@@ -39,13 +44,16 @@ import os
 from datetime import UTC, datetime
 from pathlib import PosixPath
 from typing import Any
+from urllib.parse import urlsplit
 
 __all__ = [
     "configured",
     "document_id",
+    "endpoint",
     "index_hh_page",
     "index_name",
     "last_error",
+    "normalize_url",
     "read_page",
     "search_ttl_s",
     "status",
@@ -155,6 +163,76 @@ def document_id(doc_type: str, doc_id: int) -> str:
     return str(PosixPath(doc_type) / str(doc_id))
 
 
+def _strip_wrapping(value: str) -> str:
+    """Return *value* without whitespace or quotes wrapped around it.
+
+    Parameters
+    ----------
+    value:
+        Raw environment value.
+
+    Returns
+    -------
+    str
+        The same value with surrounding whitespace and ``"``/``'`` removed.
+    """
+    return value.strip().strip("\"'").strip()
+
+
+def normalize_url(raw: str) -> str:
+    """Return an absolute ``http(s)`` URL for the Upstash REST endpoint.
+
+    The value reaches this process from three unrelated places — a shell
+    ``export``, a ``.env`` file, and a deployment's environment-variable
+    editor — and each mangles it differently. The committed ``.env`` keeps the
+    URL in quotes, ``.env`` readers disagree about stripping them, and a UI
+    field tends to lose the scheme. httpx accepts none of those, and the
+    rejection surfaces as ``UnsupportedProtocol`` at the first request, long
+    after the typo: that is how a deployment wrote nothing while every tool
+    still answered. Normalizing once, here, turns that silent outage into a
+    working one, and :func:`endpoint` shows what was understood.
+
+    Parameters
+    ----------
+    raw:
+        Value of ``UPSTASH_SEARCH_REST_URL``, in any of the shapes above.
+
+    Returns
+    -------
+    str
+        An absolute URL without a trailing slash, e.g.
+        ``"https://db-1.upstash.io"``. Empty input yields ``""``.
+    """
+    value = _strip_wrapping(raw)
+    if not value:
+        return ""
+    if "://" not in value and ":/" in value:
+        # A dropped slash ("https:/host") is the same typo, one character out.
+        value = value.replace(":/", "://", 1)
+    scheme, separator, rest = value.partition("://")
+    if separator and scheme.lower() in {"http", "https"}:
+        value = f"{scheme.lower()}://{rest}"
+    else:
+        value = f"https://{value}"
+    return value.rstrip("/")
+
+
+def endpoint() -> str | None:
+    """Return the Upstash host this process is configured to use.
+
+    Returns
+    -------
+    str | None
+        Host of the normalized endpoint URL, or ``None`` when it is unset or
+        carries no host. Only the host is reported; the token stays in the
+        environment.
+    """
+    url = normalize_url(os.environ.get("UPSTASH_SEARCH_REST_URL", ""))
+    if not url:
+        return None
+    return urlsplit(url).netloc or None
+
+
 def configured() -> bool:
     """Return whether indexing credentials are present in the environment.
 
@@ -191,7 +269,15 @@ def _build_client():
 
     if not configured():
         raise RuntimeError("UPSTASH_SEARCH_REST_URL/TOKEN are not set")
-    return Search.from_env()
+    raw_url = os.environ["UPSTASH_SEARCH_REST_URL"]
+    url = normalize_url(raw_url)
+    if url != raw_url.strip():
+        logger.warning(
+            "UPSTASH_SEARCH_REST_URL is not a plain absolute URL (got %r); using %s",
+            raw_url.strip(),
+            url,
+        )
+    return Search(url=url, token=_strip_wrapping(os.environ["UPSTASH_SEARCH_REST_TOKEN"]))
 
 
 def _client():

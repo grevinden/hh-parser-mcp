@@ -100,9 +100,28 @@ class TestRuntimeInfo:
             "python",
             "fastmcp",
             "search",
+            "search_endpoint",
             "search_error",
         }
         assert all(isinstance(v, str | None) for v in info.values())
+
+    def test_reports_the_endpoint_it_would_write_to(self, monkeypatch):
+        """Which index is written is invisible otherwise."""
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "https://db-1.upstash.io/")
+        assert runtime_info()["search_endpoint"] == "db-1.upstash.io"
+
+    def test_endpoint_reflects_normalization(self, monkeypatch):
+        """A URL that lost its scheme still names the host it resolves to."""
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "db-1.upstash.io")
+        assert runtime_info()["search_endpoint"] == "db-1.upstash.io"
+
+    def test_endpoint_is_none_without_credentials(self):
+        assert runtime_info()["search_endpoint"] is None
+
+    def test_endpoint_never_leaks_the_token(self, monkeypatch):
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "https://db-1.upstash.io")
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", "super-secret-token")
+        assert "super-secret-token" not in json.dumps(runtime_info())
 
     def test_reports_search_backend_state(self, monkeypatch):
         """Indexing fails silently, so the build report names its state."""
