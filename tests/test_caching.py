@@ -141,3 +141,27 @@ class TestResponseCaching:
 
         assert calls == ["https://hh.ru/vacancy/138156968"]
         assert first.content[0].text == second.content[0].text
+
+
+class TestCacheEnabled:
+    """``HH_MCP_CACHE`` switches the response cache off for iterative work."""
+
+    @pytest.mark.parametrize("value", ["0", "off", "false", "no", "OFF", " No "])
+    def test_off_values_disable_cache(self, monkeypatch, value):
+        monkeypatch.setenv("HH_MCP_CACHE", value)
+        import server
+
+        assert server.cache_enabled() is False
+
+    @pytest.mark.parametrize("value", ["1", "on", "true", "yes", ""])
+    def test_other_values_keep_cache(self, monkeypatch, value):
+        monkeypatch.setenv("HH_MCP_CACHE", value)
+        import server
+
+        assert server.cache_enabled() is True
+
+    def test_unset_keeps_cache(self, monkeypatch):
+        monkeypatch.delenv("HH_MCP_CACHE", raising=False)
+        import server
+
+        assert server.cache_enabled() is True

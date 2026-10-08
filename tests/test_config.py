@@ -139,6 +139,37 @@ class TestNoisePolicy:
         """Optional attrs may arrive with ``None`` values; no crash."""
         assert not default_policy.is_noise("div", {"data-qa": None, "href": None})
 
+    @pytest.mark.parametrize(
+        "data_qa",
+        [
+            # Right-column fact cards on employer pages ("Город" /
+            # "Сферы деятельности" / "Тип регистрации") and the "Сайт" card.
+            "employer-page-company-info",
+            "sidebar-company-site",
+            # "Ещё компании для вас" recommendation widget.
+            "competitor-companies-title",
+            "competitor-companies-hint-activator",
+            "branded-employer-gallery",
+        ],
+    )
+    def test_is_noise_employer_sidebar_noise(self, default_policy: NoisePolicy, data_qa):
+        """Employer-page sidebar widgets are noise (case-insensitive)."""
+        assert data_qa in NOISE_DATA_QA
+        assert default_policy.is_noise("div", {"data-qa": data_qa})
+        assert default_policy.is_noise("div", {"data-qa": data_qa.upper()})
+
+    def test_company_description_block_is_not_noise(
+        self, default_policy: NoisePolicy
+    ) -> None:
+        """The description widget and the fact *cells* stay content-bearing
+        on their own — only their card containers are noise."""
+        assert not default_policy.is_noise(
+            "div", {"data-qa": "employer-view-widget-description"}
+        )
+        assert not default_policy.is_noise(
+            "div", {"data-qa": "company-info-address", "class": "chameleon-item--x"}
+        )
+
     def test_non_noise_elements(self, default_policy: NoisePolicy) -> None:
         assert not default_policy.is_noise("p", {"class": "content"})
         assert not default_policy.is_noise("h1", {})

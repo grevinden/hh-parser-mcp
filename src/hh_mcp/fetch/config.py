@@ -33,6 +33,8 @@ __all__ = [
     "NOISE_CLASS_TOKENS",
     "NOISE_CLASS_PREFIXES",
     "NOISE_DATA_QA",
+    "FACT_CELL_QA",
+    "ORPHAN_FACT_LABELS",
     "DROP_HREF_SUBSTRINGS",
     "EMPLOYER_MAX_CHARS",
     "EMPLOYER_FETCH_MAX_CHARS",
@@ -135,12 +137,52 @@ TRACKING_QUERY_KEY_PREFIXES: tuple[str, ...] = ("utm_",)
 #: the entire element is dropped by the Sanitizer.
 DROP_HREF_SUBSTRINGS: tuple[str, ...] = ("applicant/vacancy_response",)
 
+#: ``data-qa`` value of the fact cells in the employer sidebar.  hh.ru
+#: renders each cell as value + caption in sibling ``cell-text-content``
+#: spans; the cards that hold them are dropped via :data:`NOISE_DATA_QA`.
+FACT_CELL_QA: str = "cell-text-content"
+
+#: Captions of the employer sidebar facts ("Город", "Сферы деятельности",
+#: "Тип регистрации", "Сайт").  A caption that survives the removal of its
+#: card (e.g. the "Сайт" caption rendered inside the description widget)
+#: is left dangling in the output, so such orphans are dropped.
+ORPHAN_FACT_LABELS: frozenset[str] = frozenset(
+    {
+        "сайт",
+        "город",
+        "сферы деятельности",
+        "тип регистрации",
+        "адрес",
+        "сайт компании",
+    }
+)
+
 #: ``data-qa`` attribute values that mark an element as noise
 #: (matched case-insensitively). These are layout artifacts (separator
 #: glyphs, widget scaffolding) that survive class-based filtering.
+#:
+#: ``employer-page-company-info`` / ``sidebar-company-site``: the
+#: employer-page fact cards in the right column — "Город" / "Сферы
+#: деятельности" / "Тип регистрации" (``data-qa="company-info-*"`` cells)
+#: and the separate website card ("Сайт").  The description proper lives
+#: in a separate ``div.g-user-content`` block, which is kept.
+#:
+#: ``competitor-companies-*`` / ``branded-employer-gallery``: the
+#: "Ещё компании для вас" recommendation widget on employer pages — its
+#: heading, its tooltip activator and the horizontally scrollable card
+#: strip (logo, name, "N активных вакансий", "Посмотреть").  Without the
+#: strip being dropped, sanitisation leaves it as bare text: the internal
+#: "Посмотреть" links are stripped later by
+#: :func:`~hh_mcp.fetch.enrich.remove_internal_links`, which keeps the label
+#: and yields "ПосмотретьN активных вакансий" noise in the Markdown.
 NOISE_DATA_QA: frozenset[str] = frozenset(
     {
         "employer-page-reviews-badges-separator",
+        "employer-page-company-info",
+        "sidebar-company-site",
+        "competitor-companies-title",
+        "competitor-companies-hint-activator",
+        "branded-employer-gallery",
     }
 )
 

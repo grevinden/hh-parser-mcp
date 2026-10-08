@@ -8,17 +8,17 @@ This file provides guidance to agents when working with code in this repository.
 ## Сервис предоставляет следующие возможности. 
 - Получение данных о работодателе по идентификатору employer_id
 - Получение данных о вакансии + о работодателе по идентификатору vacancy_id
-- Файловый кеш ответов: повторный запрос того же id отдаётся из FileTreeStore (TTL 1 ч), hh.ru повторно не читается
+- Файловый кеш ответов: повторный запрос того же id отдаётся из FileTreeStore (TTL 1 ч), hh.ru повторно не читается; кеш отключается флагом `HH_MCP_CACHE=0`, каталог — `HH_MCP_CACHE_DIR` (по умолчанию `~/.cache/hh-mcp`; удалять только при остановленном сервере)
 - Опциональная индексация страниц в Upstash Search (best-effort): успешные fetch-и вакансий/работодателей отправляются в индекс (env UPSTASH_SEARCH_REST_URL/TOKEN/INDEX), кеш-хиты не индексируются
 
 
 ## Состояние проекта
 - **ПРОЕКТ ПОЛНОСТЬЮ РАБОТАЕТ**: MCP-сервер + интерактивные инструменты (FastMCP Apps); единственный вход — нативный пускатель `fastmcp run` из корня (см. «Команды»).
 - `src/hh_mcp/app.py` — `FastMCP("hh-mcp")` с 3 инструментами: `vacancy(id)`, `company(id)`, `search(text, page=0)`. Каждый объявлен как `@mcp.tool(app=PrefabAppConfig(visibility=["app", "model"]))` и возвращает `ToolResult(content=…, structured_content=…)` — штатный механизм FastMCP Apps: модель получает текст, браузер рисует Prefab view. **Никаких самодельных `resourceUri`/`FastMCPApp`/`register_tool` — только документированный API.** `search` парсит HTML серпа hh.ru; за пределами выдачи (page > N) — пустой список.
-- `server.py` (корень) — entry point пускателя: добавляет `ResponseCachingMiddleware` с `FileTreeStore` (файловый кеш, без Redis; каталог `~/.cache/hh-mcp`, env `HH_MCP_CACHE_DIR`) к серверу из `hh_mcp.app.mcp`, объект `mcp` (entrypoint из `fastmcp.json`).
+- `server.py` (корень) — entry point пускателя: добавляет `ResponseCachingMiddleware` с `FileTreeStore` (файловый кеш, без Redis; каталог `~/.cache/hh-mcp`, env `HH_MCP_CACHE_DIR`; `HH_MCP_CACHE=0` — middleware не подключается, каталог не создаётся) к серверу из `hh_mcp.app.mcp`, объект `mcp` (entrypoint из `fastmcp.json`).
 - `fastmcp.json` (корень) — конфиг нативного запуска (source: `server.py` → `mcp`; deployment: transport `http`, `/mcp`).
 - `src/hh_mcp/fetch/` — SOLID/DIP fetch-пайплайн (10 модулей: guards, transport, html, links, converter, orchestrator, config, errors, enrich, __init__).
-- `tests/` — 11 тестовых модулей, 353 тестов.
+- `tests/` — 11 тестовых модулей, 376 тестов.
 - Удалены: `src/hh_mcp/__main__.py` (CLI `hh-mcp`, `--dev`), `src/hh_mcp/devapp.py` (свой dev UI) — dev-режим теперь нативный (`fastmcp dev apps`).
 
 ## Стек
@@ -31,7 +31,7 @@ This file provides guidance to agents when working with code in this repository.
 - `uv run fastmcp dev apps fastmcp.json` — dev-режим: MCP-сервер + браузерный UI (Prefab/AppBridge, автооткрытие браузера; флаги `--mcp-port`, `--dev-port`, `--no-reload`). Нюанс: у **этой подкоманды** `SERVER-SPEC` обязателен (`fastmcp dev apps --help` → `[required]`) — в отличие от `fastmcp run`, конфиг здесь не авто-ищется.
 - `uv run fastmcp run --transport stdio` — переопределение транспорта поверх конфига.
 - **Удалено и не воссоздавать**: console-script `hh-mcp` (`[project.scripts]`), `python -m hh_mcp`, `hh-mcp --dev` (свой dev UI в одном процессе).
-- `uv run pytest tests/ -v` — 353 passed; none `::test_name` — полный прогон.
+- `uv run pytest tests/ -v` — 376 passed; none `::test_name` — полный прогон.
 - `uv add <pkg>` — единственная установка (уходит в `pyproject.toml`); ruff/mypy молча не подключать.
 
 ## Безопасность (SSRF) — указание

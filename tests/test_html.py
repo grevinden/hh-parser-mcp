@@ -127,11 +127,131 @@ class TestSanitizer:
         assert "·" not in result.html
         assert "company-info-site" in result.html
 
+    def test_employer_fact_card_dropped(self, sanitizer: Sanitizer) -> None:
+        """The employer-page right column (fact cells) is dropped whole.
+
+        ``data-qa="employer-page-company-info"`` wraps the "Город" /
+        "Сферы деятельности" / "Тип регистрации" cells; without it they
+        survive as the glued text "МоскваГородЛесная промышленность…".
+        The company description (``div.g-user-content``) must survive.
+        """
+        html = (
+            "<main>"
+            '<div data-qa="employer-view-widget-description">'
+            '<div class="g-user-content">Описание компании</div>'
+            "</div>"
+            '<div data-qa="employer-page-company-info">'
+            '<div data-qa="company-info-address">'
+            '<span data-qa="cell-text-content">Москва</span>'
+            '<span data-qa="cell-text-content">Город</span>'
+            "</div>"
+            '<div data-qa="company-info-industries">'
+            '<span data-qa="cell-text-content">Лесная промышленность</span>'
+            '<span data-qa="cell-text-content">Сферы деятельности</span>'
+            "</div>"
+            "</div>"
+            "</main>"
+        )
+        result = sanitizer.sanitize(html)
+        assert "employer-page-company-info" not in result.html
+        assert "company-info-address" not in result.html
+        assert "Город" not in result.html
+        assert "Сферы деятельности" not in result.html
+        assert "Лесная промышленность" not in result.html
+        # The description is content, not noise.
+        assert "Описание компании" in result.html
+
+    def test_sidebar_company_site_dropped(self, sanitizer: Sanitizer) -> None:
+        """The separate "Сайт" card in the right column is dropped."""
+        html = (
+            "<main>"
+            '<div data-qa="sidebar-company-site">'
+            '<a href="https://example.ru">https://example.ru</a>'
+            '<span data-qa="cell-text-content">Сайт</span>'
+            "</div>"
+            "<p>Описание</p>"
+            "</main>"
+        )
+        result = sanitizer.sanitize(html)
+        assert "sidebar-company-site" not in result.html
+        assert "https://example.ru" not in result.html
+        assert "Сайт" not in result.html
+        assert "Описание" in result.html
+
+    def test_competitor_companies_widget_dropped(self, sanitizer: Sanitizer) -> None:
+        """The "Ещё компании для вас" widget is dropped whole.
+
+        Its cards only carry an employer link, so keeping them would yield
+        the label noise "Посмотреть13 активных вакансий" once
+        ``remove_internal_links`` strips the URL.
+        """
+        html = (
+            "<main>"
+            '<div data-qa="competitor-companies-title">Еще компании для вас</div>'
+            '<div data-qa="competitor-companies-hint-activator">ⓘ</div>'
+            '<div data-qa="branded-employer-gallery">'
+            '<div class="branded-employers-wizard-gallery-card">'
+            '<div class="branded-employers-wizard-company-name">BAON</div>'
+            "13 активных вакансий"
+            '<a href="https://hh.ru/employer/1014">Посмотреть</a>'
+            "</div>"
+            "</div>"
+            "<p>Описание</p>"
+            "</main>"
+        )
+        result = sanitizer.sanitize(html)
+        assert "competitor-companies-title" not in result.html
+        assert "competitor-companies-hint-activator" not in result.html
+        assert "branded-employer-gallery" not in result.html
+        assert "Посмотреть" not in result.html
+        assert "активных вакансий" not in result.html
+        assert "Описание" in result.html
+
     def test_removed_count(self, custom_sanitizer: Sanitizer) -> None:
         html = "<p>ok</p><iframe src='a'></iframe><div><iframe src='b'></iframe></div>"
         result = custom_sanitizer.sanitize(html)
         assert result.removed >= 1  # top-level iframe
         assert "ok" in result.html
+
+    def test_orphan_fact_caption_dropped(self, sanitizer: Sanitizer) -> None:
+        """A fact caption that outlives its card ("Сайт" inside the
+        description widget) is dropped instead of dangling in the output."""
+        html = (
+            "<main>"
+            '<div data-qa="employer-view-widget-description">'
+            '<div class="g-user-content">Описание компании</div>'
+            '<div data-qa="cell">'
+            '<div data-qa="cell-left-side"></div>'
+            '<div data-qa="cell-text">'
+            '<span data-qa="cell-text-content">Сайт</span>'
+            "</div>"
+            "</div>"
+            "</div>"
+            "</main>"
+        )
+        result = sanitizer.sanitize(html)
+        assert "Сайт" not in result.html
+        assert "cell-text-content" not in result.html
+        assert "Описание компании" in result.html
+
+    def test_fact_cell_value_kept(self, sanitizer: Sanitizer) -> None:
+        """Fact *values* survive (only captions are orphans), even when the
+        cell wraps its text in another tag."""
+        html = (
+            "<main>"
+            '<div data-qa="cell-text">'
+            '<span data-qa="cell-text-content"><div>Москва</div></span>'
+            "</div>"
+            '<div data-qa="cell-text">'
+            '<span data-qa="cell-text-content">Республика Татарстан</span>'
+            "</div>"
+            "</main>"
+        )
+        result = sanitizer.sanitize(html)
+        assert "Москва" in result.html
+        assert "Республика Татарстан" in result.html
+        # The nested markup is normalised to a flat span.
+        assert "<div>Москва</div>" not in result.html
 
     # --- Main-block extraction (default noise policy) ---
 

@@ -33,8 +33,9 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
 - **Файловый кеш ответов** — `ResponseCachingMiddleware` + `FileTreeStore`
   (без Redis) в [`server.py`](server.py): повторный вызов `vacancy` /
   `company` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
-  (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`).
-- **353 тестов** — `uv run pytest tests/ -v` (app, fetch-модуль, guards, html,
+  (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`;
+  отключается флагом `HH_MCP_CACHE=0`).
+- **376 тестов** — `uv run pytest tests/ -v` (app, fetch-модуль, guards, html,
   links, converter, orchestrator, transport, config, errors, enrich, caching).
 
 ---
@@ -251,11 +252,21 @@ http://127.0.0.1:8000/mcp
 - **Каталог кеша** — `~/.cache/hh-mcp` по умолчанию; переопределяется
   переменной окружения `HH_MCP_CACHE_DIR`. Кеш переживает рестарт сервера
   (файлы на диске).
+- **Отключение** — `HH_MCP_CACHE=0` (также `off` / `false` / `no`): middleware
+  не подключается вовсе, каталог кеша не создаётся и каждый вызов идёт на
+  hh.ru. Полезно при отладке, когда нужен свежий ответ.
 
 ```bash
 # Пример: другой каталог кеша
 HH_MCP_CACHE_DIR=/var/cache/hh-mcp uv run fastmcp run
+
+# Пример: без кеша (каждый вызов читает hh.ru)
+HH_MCP_CACHE=0 uv run fastmcp run
 ```
+
+> Каталог кеша удаляйте **только при остановленном сервере**: живой
+> `FileTreeStore` держит открытые дескрипторы и без каталога падает с
+> `FileNotFoundError`.
 
 ---
 
@@ -266,9 +277,10 @@ HH_MCP_CACHE_DIR=/var/cache/hh-mcp uv run fastmcp run
 uv run pytest tests/ -v
 ```
 
-**353 тестов**, все passed. Покрытие:
+**376 тестов**, все passed. Покрытие:
 - `test_mcp_app.py` — инструменты, валидация, error mapping, UI-entry;
-- `test_caching.py` — файловый кеш: повторный id не дёргает fetch;
+- `test_caching.py` — файловый кеш: повторный id не дёргает fetch; флаг
+  `HH_MCP_CACHE=0`;
 - `test_enrich.py` — обогащение employer-карточки;
 - `test_guards.py` — SSRF-защита (localhost, userinfo, схемы);
 - `test_html.py` — санитайзер, NoisePolicy;

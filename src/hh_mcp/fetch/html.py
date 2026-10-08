@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from html import unescape
+from html import escape, unescape
 from html.parser import HTMLParser
 
-from .config import NoisePolicy, RequestConfig
+from .config import FACT_CELL_QA, ORPHAN_FACT_LABELS, NoisePolicy, RequestConfig
 from .links import resolve_relative_links
 
 __all__ = [
@@ -124,6 +124,10 @@ class _ReconstructingHtmlParser(HTMLParser):
         self._out_parts: list[str] = []
         self._main_state: str = "pre" if noise.main_extraction else "in"
         self._main_depth: int = 0
+        # Fact-cell buffering: depth > 0 while inside a
+        # ``data-qa="cell-text-content"`` span (see _flush_fact_cell).
+        self._cell_depth: int = 0
+        self._cell_parts: list[str] = []
 
     # -- helpers ----------------------------------------------------------
 
@@ -175,6 +179,18 @@ class _ReconstructingHtmlParser(HTMLParser):
         tag_lower = tag.lower()
 
         if self._literal_tag is not None:
+            return
+
+        # Fact cells (``data-qa="cell-text-content"``) are buffered instead of
+        # being streamed: an employer-sidebar caption ("Сайт") may outlive the
+        # card it belongs to, and the dangling word is dropped at flush time.
+        if self._cell_depth:
+            if tag_lower not in self._VOID_ELEMENTS:
+                self._cell_depth += 1
+            return
+        if tag_lower == "span" and dict(attrs).get("data-qa") == FACT_CELL_QA:
+            self._cell_depth = 1
+            self._cell_parts = []
             return
 
         if tag_lower in self.LITERAL_ELEMENTS:
@@ -238,6 +254,12 @@ class _ReconstructingHtmlParser(HTMLParser):
                 self._in_title = False
             return
 
+        if self._cell_depth:
+            self._cell_depth -= 1
+            if self._cell_depth == 0:
+                self._flush_fact_cell()
+            return
+
         if (
             tag_lower == "main"
             and self._main_state == "in"
@@ -285,6 +307,9 @@ class _ReconstructingHtmlParser(HTMLParser):
             if self._literal_tag == "title" and self._in_title:
                 self._title_parts.append(data)
             return
+        if self._cell_depth:
+            self._cell_parts.append(data)
+            return
         self._route(data)
 
     def handle_entityref(self, name: str) -> None:
@@ -292,6 +317,9 @@ class _ReconstructingHtmlParser(HTMLParser):
         if self._literal_tag is not None:
             if self._literal_tag == "title" and self._in_title:
                 self._title_parts.append(text)
+            return
+        if self._cell_depth:
+            self._cell_parts.append(text)
             return
         self._route(text)
 
@@ -301,7 +329,33 @@ class _ReconstructingHtmlParser(HTMLParser):
             if self._literal_tag == "title" and self._in_title:
                 self._title_parts.append(text)
             return
+        if self._cell_depth:
+            self._cell_parts.append(text)
+            return
         self._route(text)
+
+    def _flush_fact_cell(self) -> None:
+        """Emit (or drop) the buffered ``cell-text-content`` span.
+
+        hh.ru renders the employer sidebar as a value + caption pair per
+        fact ("Москва" / "Город").  The cards holding those cells are
+        removed wholesale (:data:`~hh_mcp.fetch.config.NOISE_DATA_QA`),
+        but a caption can also be rendered *inside* the description widget
+        (the "Сайт" cell) — such an orphan caption would otherwise survive
+        as a dangling word at the end of the Markdown.  Captions listed in
+        :data:`~hh_mcp.fetch.config.ORPHAN_FACT_LABELS` are therefore
+        dropped; anything else (a real value such as "Москва", or free
+        text) is re-emitted with its text content preserved and its
+        original markup normalised to a flat span.
+        """
+        raw = "".join(self._cell_parts)
+        text = " ".join(unescape(raw).split())
+        if not text:
+            return
+        if text.casefold() in ORPHAN_FACT_LABELS:
+            self._removed_count += 1
+            return
+        self._emit(f'<span data-qa="{FACT_CELL_QA}">{escape(text)}</span>')
 
     def handle_comment(self, data: str) -> None:
         # Comments are suppressed (rarely useful in the output).
