@@ -23,7 +23,7 @@ from key_value.aio.stores.filetree import (
 )
 
 import hh_mcp.app as app_module
-from hh_mcp.app import app
+from hh_mcp.app import mcp
 
 CACHED_TOOLS: list[str] = ["vacancy", "company"]
 """Same tool allowlist as ``server.CACHED_TOOLS``."""
@@ -34,7 +34,9 @@ def _counting_fetch(calls: list[str]):
 
     def fake(url: str, **kwargs: object) -> str:
         calls.append(url)
-        return f"# Page {len(calls)}: {url}"
+        # Body padded past hh_mcp.app.MIN_CONTENT_CHARS so the empty-page
+        # guard does not reject the stub.
+        return f"# Page {len(calls)}: {url}\n" + ("Тело страницы. " * 40)
 
     return fake
 
@@ -50,7 +52,7 @@ def _build_server(cache_dir, *, included_tools: list[str] | None = None) -> Fast
         ),
     )
     server = FastMCP("hh-mcp-cache-test")
-    server.add_provider(app)
+    server.add_provider(mcp)
     server.add_middleware(
         ResponseCachingMiddleware(
             cache_storage=store,

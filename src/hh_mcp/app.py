@@ -1,26 +1,27 @@
-"""hh-mcp FastMCPApp — hh.ru pages as MCP tools.
+"""hh-mcp tools — hh.ru vacancies and companies.
 
-Three tools (:func:`vacancy`, :func:`company`, :func:`search`) serve **both**
-audiences at once: they are visible to the model (``visibility: ["app",
-"model"]``) and appear in the browser Apps picker, which generates the input
-form from each tool's JSON schema. A tool gets into the picker by carrying the
-Prefab renderer placeholder in ``meta["ui"]["resourceUri"]``; fastmcp then
-synthesizes a per-tool renderer resource on the fly.
+Three tools (:func:`vacancy`, :func:`company`, :func:`search`) are registered
+with ``app=PrefabAppConfig(visibility=["app", "model"])``. That single
+declaration makes each tool visible to the model *and* to the Apps UI: fastmcp
+synthesizes the Prefab renderer resource and the browser picker builds the
+input form from the tool's own JSON schema.
+
+Each tool returns :class:`ToolResult` — the documented way to serve both
+audiences at once (gofastmcp.com/apps/prefab, "Giving the LLM context"):
+``content`` is the text the model reasons about, ``structured_content`` is
+the Prefab view the browser renders.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
-from typing import Any
 from urllib.parse import quote_plus
 
-from fastmcp import FastMCPApp
+from fastmcp import FastMCP
+from fastmcp.apps import PrefabAppConfig
 from fastmcp.exceptions import ToolError
-from fastmcp.server.providers.local_provider.decorators.tools import (
-    PREFAB_RENDERER_URI,
-)
-from fastmcp.tools.base import Tool
+from fastmcp.tools import ToolResult
+from prefab_ui.components import Column, DataTable, DataTableColumn, Markdown, Muted
 
 from hh_mcp.fetch import (
     ConversionError,
@@ -33,11 +34,12 @@ from hh_mcp.fetch import (
     TransportError,
     UnsupportedContentTypeError,
     fetch_as_markdown,
+    fetch_page,
 )
 from hh_mcp.search_index import index_hh_page
 
 __all__ = [
-    "app",
+    "mcp",
     "vacancy",
     "company",
     "search",
@@ -46,51 +48,35 @@ __all__ = [
 # --- Configuration ---------------------------------------------------------
 
 TIMEOUT_S: int = 30
-"""HTTP timeout passed to :func:`fetch_as_markdown` (seconds)."""
+"""HTTP timeout passed to the fetch pipeline (seconds)."""
 
 MAX_CHARS: int = 120_000
 """Maximum Markdown characters returned by :func:`fetch_as_markdown`."""
 
+MIN_CONTENT_CHARS: int = 200
+"""Minimum body length for a page to count as real content.
+
+A closed or archived vacancy is not a 404: hh.ru 302-redirects it to a regional
+landing/lead page (e.g. ``kolomna.hh.ru/vrsurvey/...``) whose ``<main>`` holds
+only an embedded JSON state dump. The sanitizer strips that and Markdown ends up
+as a lone ``# HeadHunter`` title. Passing it off as the vacancy would be a silent
+lie, so the tool reports a fetch failure instead.
+"""
+
+UI_CONFIG: PrefabAppConfig = PrefabAppConfig(visibility=["app", "model"])
+"""Renders the tool in the Apps UI and keeps it visible to the model."""
+
 # --- Application -----------------------------------------------------------
 
-app: FastMCPApp = FastMCPApp("hh-mcp")
+mcp: FastMCP = FastMCP("hh-mcp")
 
-
-# --- Dual registration (model + browser) -----------------------------------
-
-def register_tool(name: str, fn: Callable[..., Any]) -> None:
-    """Register *fn* as one tool usable by both the model and the web UI.
-
-    The tool keeps ``visibility: ["app", "model"]`` — an LLM can call it over
-    MCP, and the Apps picker lists it because its meta carries the Prefab
-    renderer placeholder. fastmcp rewrites that placeholder into a per-tool
-    ``ui://prefab/tool/<hash>/renderer.html`` resource at ``tools/list`` time,
-    synthesizing the renderer HTML on demand. The picker then builds the input
-    form from the tool's own JSON schema, so no separate UI entry-point tool is
-    needed.
-
-    Parameters
-    ----------
-    name:
-        Tool name as exposed over MCP (e.g. ``"vacancy"``).
-    fn:
-        The tool function; its signature and return annotation drive the
-        generated input/output schemas.
-    """
-    tool = Tool.from_function(
-        fn,
-        name=name,
-        meta={
-            "ui": {
-                "resourceUri": PREFAB_RENDERER_URI,
-                "visibility": ["app", "model"],
-            }
-        },
-    )
-    app.add_tool(tool)
+VACANCY_ID_RE = re.compile(
+    r'data-qa="serp-item__title"[^>]*href="[^"]*/vacancy/(\d+)', re.M
+)
 
 
 # --- Error mapping ---------------------------------------------------------
+
 
 def _tool_error(exc: Exception) -> ToolError:
     """Map a fetch exception to a user-facing :class:`ToolError`.
@@ -102,7 +88,7 @@ def _tool_error(exc: Exception) -> ToolError:
     Parameters
     ----------
     exc:
-        Exception raised by :func:`hh_mcp.fetch.fetch_as_markdown`.
+        Exception raised by the fetch pipeline.
 
     Returns
     -------
@@ -126,6 +112,24 @@ def _tool_error(exc: Exception) -> ToolError:
     if isinstance(exc, FetchError):
         return ToolError(str(exc))
     return ToolError(f"Unexpected error: {exc}")
+
+
+def _markdown_body(md: str) -> str:
+    """Return *md* without heading lines, for a content-length check.
+
+    Parameters
+    ----------
+    md:
+        Markdown as produced by the fetch pipeline.
+
+    Returns
+    -------
+    str
+        Body text with ``#``-heading lines dropped.
+    """
+    return "\n".join(
+        line for line in md.splitlines() if not line.lstrip().startswith("#")
+    ).strip()
 
 
 def _fetch_markdown(url: str, *, doc_type: str | None = None, doc_id: int | None = None) -> str:
@@ -156,6 +160,13 @@ def _fetch_markdown(url: str, *, doc_type: str | None = None, doc_id: int | None
         md = fetch_as_markdown(url, timeout=TIMEOUT_S, max_chars=MAX_CHARS)
     except (SSRError, InvalidURLError, FetchError) as exc:
         raise _tool_error(exc) from None
+
+    if len(_markdown_body(md)) < MIN_CONTENT_CHARS:
+        raise ToolError(
+            f"hh.ru returned no vacancy content for {url} "
+            "(closed or archived vacancy redirects to a landing page)"
+        )
+
     if doc_type is not None and doc_id is not None:
         try:
             index_hh_page(doc_type=doc_type, doc_id=doc_id, url=url, md=md)
@@ -166,7 +177,9 @@ def _fetch_markdown(url: str, *, doc_type: str | None = None, doc_id: int | None
 
 # --- Tools -----------------------------------------------------------------
 
-def vacancy(id: int) -> str:
+
+@mcp.tool(app=UI_CONFIG)
+def vacancy(id: int) -> ToolResult:
     """Fetch an hh.ru vacancy page as Markdown.
 
     Parameters
@@ -177,8 +190,9 @@ def vacancy(id: int) -> str:
 
     Returns
     -------
-    str
-        The page's main content in Markdown.
+    ToolResult
+        ``content`` is the page in Markdown; ``structured_content`` renders
+        the same text in the browser.
 
     Raises
     ------
@@ -187,13 +201,19 @@ def vacancy(id: int) -> str:
     """
     if id <= 0:
         raise ToolError(f"Invalid ID: {id}")
-    return _fetch_markdown(
+    md = _fetch_markdown(
         f"https://hh.ru/vacancy/{id}", doc_type="vacancy", doc_id=id
     )
 
+    with Column(gap=4, css_class="p-6 max-w-4xl mx-auto") as view:
+        Markdown(md)
 
-def company(id: int) -> str:
-    """Fetch an hh.ru employer (company) page as Markdown.
+    return ToolResult(content=md, structured_content=view)
+
+
+@mcp.tool(app=UI_CONFIG)
+def company(id: int) -> ToolResult:
+    """Fetch an hh.ru company (employer) page as Markdown.
 
     Parameters
     ----------
@@ -203,8 +223,9 @@ def company(id: int) -> str:
 
     Returns
     -------
-    str
-        The page's main content in Markdown.
+    ToolResult
+        ``content`` is the page in Markdown; ``structured_content`` renders
+        the same text in the browser.
 
     Raises
     ------
@@ -213,15 +234,18 @@ def company(id: int) -> str:
     """
     if id <= 0:
         raise ToolError(f"Invalid ID: {id}")
-    return _fetch_markdown(
+    md = _fetch_markdown(
         f"https://hh.ru/employer/{id}", doc_type="employer", doc_id=id
     )
 
+    with Column(gap=4, css_class="p-6 max-w-4xl mx-auto") as view:
+        Markdown(md)
 
-VACANCY_ID_RE = re.compile(r'data-qa="serp-item__title"[^>]*href="[^"]*/vacancy/(\d+)', re.M)
+    return ToolResult(content=md, structured_content=view)
 
 
-def search(text: str, page: int = 0) -> list[int]:
+@mcp.tool(app=UI_CONFIG)
+def search(text: str, page: int = 0) -> ToolResult:
     """Search hh.ru vacancies and return a flat list of vacancy IDs.
 
     Parameters
@@ -230,11 +254,13 @@ def search(text: str, page: int = 0) -> list[int]:
         Search query (keywords, title fragments).
     page:
         Zero-based page number for pagination (passed as ``&page=``).
+        Beyond the last page the result is an empty list.
 
     Returns
     -------
-    list[int]
-        List of numeric vacancy identifiers for the requested page (only IDs).
+    ToolResult
+        ``content`` lists the vacancy IDs; ``structured_content`` renders them
+        as a sortable table.
     """
     if not isinstance(text, str) or not text.strip():
         raise ToolError("Invalid text: non-empty string required")
@@ -252,29 +278,29 @@ def search(text: str, page: int = 0) -> list[int]:
         f"&page={page}"
     )
 
+    # Raw HTML (the IDs live in data-qa attributes), same transport and SSRF
+    # guard as fetch_as_markdown.
     try:
-        # Нужен сырой HTML (ID лежат в data-qa атрибутах серпа), поэтому берём
-        # fetch_page — тот же транспорт и тот же SSRF-guard, что и fetch_as_markdown.
-        from hh_mcp.fetch import fetch_page
-
-        html_bytes = fetch_page(url, timeout=TIMEOUT_S)
-        html = html_bytes.decode("utf-8", errors="replace")
+        html = fetch_page(url, timeout=TIMEOUT_S).decode("utf-8", errors="replace")
     except (SSRError, InvalidURLError, FetchError) as exc:
         raise _tool_error(exc) from None
     except Exception as exc:
         raise ToolError(f"Unexpected error: {exc}") from None
 
-    ids = []
-    for m in VACANCY_ID_RE.finditer(html):
-        try:
-            ids.append(int(m.group(1)))
-        except ValueError:
-            continue
-    return ids
+    ids = [int(m.group(1)) for m in VACANCY_ID_RE.finditer(html)]
 
+    if ids:
+        joined = ", ".join(str(i) for i in ids)
+        summary = f"Найдено {len(ids)} вакансий (страница {page}): {joined}"
+    else:
+        summary = f"Ничего не найдено (страница {page})."
 
-# --- Registration (one tool for model + browser) -----------------------
+    with Column(gap=4, css_class="p-6 max-w-4xl mx-auto") as view:
+        Muted(summary)
+        DataTable(
+            columns=[DataTableColumn(key="id", header="Vacancy ID", sortable=True)],
+            rows=[{"id": i} for i in ids],
+            search=True,
+        )
 
-register_tool("vacancy", vacancy)
-register_tool("company", company)
-register_tool("search", search)
+    return ToolResult(content=summary, structured_content=view)

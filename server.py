@@ -6,16 +6,13 @@ Run from the repository root::
     uv run fastmcp dev apps .   # dev preview: MCP server + browser UI
 
 The launcher imports this module and picks up :data:`mcp` (the
-``entrypoint`` declared in ``fastmcp.json``).
-
-``hh_mcp.app.app`` is a :class:`fastmcp.FastMCPApp` — a *Provider*, not a
-server — so the canonical composition applies: build a ``FastMCP`` server
-and attach the provider (gofastmcp.com/apps pattern).
+``entrypoint`` declared in ``fastmcp.json``). The tools themselves live in
+``hh_mcp.app``; here we only add cross-cutting middleware.
 
 The server enables :class:`ResponseCachingMiddleware` with a **file-backed**
-store (``FileTreeStore`` from ``py-key-value-aio``): repeating a backend
-tool call with the same argument (e.g. the same vacancy id) is served
-from the cache instead of hitting hh.ru again.
+store (``FileTreeStore`` from ``py-key-value-aio``): repeating a tool call
+with the same argument (e.g. the same vacancy id) is served from the cache
+instead of hitting hh.ru again.
 """
 
 from __future__ import annotations
@@ -23,7 +20,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastmcp import FastMCP
 from fastmcp.server.middleware.caching import ResponseCachingMiddleware
 from key_value.aio.stores.filetree import (
     FileTreeStore,
@@ -31,7 +27,7 @@ from key_value.aio.stores.filetree import (
     FileTreeV1KeySanitizationStrategy,
 )
 
-from hh_mcp.app import app
+from hh_mcp.app import mcp
 
 __all__ = ["mcp"]
 
@@ -51,10 +47,11 @@ CACHED_TOOLS: tuple[str, ...] = ("vacancy", "company")
 ``search`` is deliberately absent — its results change between pages.
 """
 
-# Sanitization strategies need the directory to already exist.
+# The sanitization strategies below inspect the directory (max filename
+# length), so it must exist before they are constructed.
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-_cache_store = FileTreeStore(
+cache_store = FileTreeStore(
     data_directory=CACHE_DIR,
     key_sanitization_strategy=FileTreeV1KeySanitizationStrategy(CACHE_DIR),
     collection_sanitization_strategy=FileTreeV1CollectionSanitizationStrategy(
@@ -62,11 +59,9 @@ _cache_store = FileTreeStore(
     ),
 )
 
-mcp = FastMCP(app.name)
-mcp.add_provider(app)
 mcp.add_middleware(
     ResponseCachingMiddleware(
-        cache_storage=_cache_store,
+        cache_storage=cache_store,
         call_tool_settings={
             "ttl": CACHE_TTL_S,
             "included_tools": list(CACHED_TOOLS),

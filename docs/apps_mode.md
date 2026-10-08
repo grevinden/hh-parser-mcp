@@ -6,60 +6,64 @@
 > по API.
 
 > **Актуально для hh-mcp:** отдельных UI-инструментов нет. Все три тулзы
-> (`vacancy`, `company`, `search`) зарегистрированы через `register_tool()`
-> и работают **одновременно** для модели и для браузера — см. §1.1.
-> Описание ролей `@app.ui()` / `@app.tool()` ниже сохранено как справочный
-> материал о механике FastMCP.
+> (`vacancy`, `company`, `search`) работают **одновременно** для модели и для
+> браузера — см. §1.1. Описание ролей `@app.ui()` / `@app.tool()` ниже
+> сохранено как справочный материал о механике FastMCP.
 
 ---
 
 ## 1.1. Один инструмент — модель и браузер (как в hh-mcp)
 
-Фастмкп сам умеет показывать **обычный** инструмент в браузерном пикере Apps:
-форма ввода строится из JSON-схемы тулзы, отдельный `@app.ui()`-вход не нужен.
-Ключ — `meta["ui"]["resourceUri"]`:
+Это штатный сценарий FastMCP Apps, описанный в
+[gofastmcp.com/apps/prefab](https://gofastmcp.com/apps/prefab). Два элемента:
+
+1. **`app=PrefabAppConfig(...)`** в декораторе — инструмент получает
+   синтезированный ресурс рендерера `ui://prefab/tool/<hash>/renderer.html`
+   и попадает в браузерный пикер; форма ввода строится из его JSON-схемы.
+2. **`ToolResult(content=…, structured_content=…)`** — «The user sees the
+   chart. The model sees the summary»: `content` уходит модели, `structured_content`
+   рисует рендерер (раздел «Giving the LLM context» в документации).
 
 ```python
-from fastmcp.server.providers.local_provider.decorators.tools import (
-    PREFAB_RENDERER_URI,  # "ui://prefab/renderer.html" — плейсхолдер
-)
-from fastmcp.tools.base import Tool
+from fastmcp.apps import PrefabAppConfig
+from fastmcp.tools import ToolResult
+from prefab_ui.components import Column, DataTable, DataTableColumn, Markdown
 
-tool = Tool.from_function(
-    fn,
-    name="vacancy",
-    meta={
-        "ui": {
-            "resourceUri": PREFAB_RENDERER_URI,   # маркер браузерного UI
-            "visibility": ["app", "model"],       # видно и вебу, и модели
-        }
-    },
-)
-app.add_tool(tool)
+UI_CONFIG = PrefabAppConfig(visibility=["app", "model"])
+
+@mcp.tool(app=UI_CONFIG)
+def search(text: str, page: int = 0) -> ToolResult:
+    """Найти вакансии."""
+    ids = fetch_ids(text, page)
+
+    with Column(gap=4, css_class="p-6") as view:
+        DataTable(
+            columns=[DataTableColumn(key="id", header="Vacancy ID", sortable=True)],
+            rows=[{"id": i} for i in ids],
+            search=True,
+        )
+
+    summary = f"Найдено {len(ids)} вакансий: " + ", ".join(map(str, ids))
+    return ToolResult(content=summary, structured_content=view)
 ```
 
-Что происходит дальше (проверено на fastmcp 4.0.11):
+**Почему это важно и неочевидно.** Если вернуть из тулзы «просто данные», то
+`structuredContent` будет содержать `result`/`$prefab`-обёртку без `view`, и
+рендерер покажет бесконечный спиннер «Waiting for content…»: он рисует
+`structuredContent.view` и больше ничего (`prefab_ui/renderer/app.html`).
+Именно `structured_content` с компонентом делает страницу рабочей.
 
-1. При `tools/list` плейсхолдер переписывается в per-tool ресурс
-   `ui://prefab/tool/<hash>/renderer.html` — HTML рендерера и CSP
-   **синтезируются на лету** из метаданных тулзы, ничего не хранится
-   (`fastmcp/server/providers/local_provider/decorators/tools.py`,
-   `_stamp_prefab_marker` / `_maybe_apply_prefab_ui`).
-2. `resources/list` отдаёт этот ресурс; он же служит признаком попадания в пикер
-   (`fastmcp/cli/apps_dev.py`, `_has_ui_resource`).
-3. Пикер строит форму через `_model_from_schema(inputSchema)` — поля выводятся
-   из сигнатуры функции; есть переключатель «Edit as JSON».
-4. Запуск: `POST /api/launch` с именем тулзы и аргументами → `GET /launch`
-   открывает страницу хоста с подставленными аргументами.
+Проверено на живом сервере (`tools/list` + `tools/call`):
 
-Проверено на живом сервере: тулзы `vacancy`, `company`, `search` возвращают
-`resourceUri` вида `ui://prefab/tool/5097c702226b/renderer.html` при
-`visibility: ["app","model"]`, а `_has_ui_resource` отбирает все три.
+| Тулза | `resourceUri` | `structuredContent` | `content[0].text` |
+|---|---|---|---|
+| `vacancy` | `ui://prefab/tool/<hash>/renderer.html` | `$prefab` + `view` | Markdown страницы |
+| `company` | то же | `$prefab` + `view` | Markdown компании |
+| `search` | то же | `$prefab` + `view` (`DataTable`) | список ID |
 
-**Что при этом нельзя описать схемой** — куда девать результат *внутри*
-страницы (свой layout, блок с ID, тост). Если такой кастомизации нужен,
-приходится возвращаться к отдельной `@app.ui()`-панели: она получает `$result`
-через `CallTool` и может положить его в состояние (`SetState`) и отрисовать.
+Отдельная `@app.ui()`-панель по-прежнему нужна, когда UI **сам** вызывает
+backend-тулзы (форма с кнопкой, CRUD, мастер) — для этого есть `FastMCPApp`
+и `CallTool`. В hh-mcp это не требуется: форму ввода рисует пикер по схеме.
 
 ---
 
@@ -189,8 +193,9 @@ def vacancy_app() -> Column:              # 1. Модель открывает �
 | `@app.tool()` | `["app"]` | ❌ | ✅ |
 | `@app.tool(model=True)` | `["app", "model"]` | ✅ | ✅ |
 
-В hh-mcp все три тулзы зарегистрированы с `visibility: ["app", "model"]`
-через `register_tool()`, поэтому их видит и модель, и браузерный пикер.
+В hh-mcp все три тулзы объявлены как
+`@mcp.tool(app=PrefabAppConfig(visibility=["app", "model"]))`, поэтому их видит и
+модель, и браузерный пикер.
 
 Следствия:
 
@@ -271,79 +276,70 @@ Prefab-хост). Обычный JSON-клиент получит тот же о
 | Получить Markdown компании | `company` | `{"id": int}` |
 | Найти ID вакансий | `search` | `{"text": str, "page": int}` |
 
-### 5.6. Формат ответа backend-инструмента: «две одинаковые строки» — это норма
+### 5.6. Формат ответа: что видит модель и что рисует браузер
 
-Полный JSON-ответ `tools/call` на `vacancy` содержит **один и тот же текст
-дважды**:
+Ответ `tools/call` на `search` — это `ToolResult` (см. §1.1):
 
 ```json
 {
-  "content": [{"type": "text", "text": "# Ведущий программист 1С\n…"}],
-  "structuredContent": {"result": "# Ведущий программист 1С\n…"}
+  "content": [{"type": "text", "text": "Найдено 17 вакансий (страница 0): 138103881, …"}],
+  "structuredContent": {
+    "$prefab": {"version": "0.3"},
+    "view": {"type": "Div", "cssClass": "pf-app-root", "children": [ … DataTable … ]}
+  }
 }
 ```
 
-Это **штатное поведение fastmcp 4.x** (механизм `wrap-result`), а не дубликат
-данных:
+- `content[0].text` — то, что читает модель (для `vacancy` / `company` это
+  Markdown страницы целиком);
+- `structuredContent.view` — то, что рисует рендерер Prefab.
 
-- `content[0].text` — текст для обычных MCP-клиентов (LLM, curl и т.п.);
-- `structuredContent.result` — та же строка, обёрнутая в `{"result": …}`
-  для клиентов с поддержкой apps/structured content; fastmcp-клиент
-  автоматически разворачивает её обратно (`.get("result")`).
+Обе части — штатный вывод fastmcp 4.x, данные не дублируются: `view` содержит
+только дерево компонентов, а сами ID лежат в `content`.
 
-Сам Markdown внутри **не задвоен**: заголовок `## About the employer`
-встречается один раз (проверено на fastmcp 4.0.11 / prefab-ui 0.20.2).
+### 5.7. Тосты «Готово» / «Ошибка» — только для самописных панелей
 
-### 5.7. Тост «Готово» / «Ошибка» — что они значат
+В hh-mcp тостов нет: браузер запускает тулзы через пикер и показывает ответ на
+странице хоста. Тосты относятся к самописным `@app.ui()`-панелям — там, где UI
+сам вызывает backend-тулзу через `CallTool`.
 
-В dev-UI (панель операций сервера слева) каждый вызов показывается полностью —
-аргументы и JSON-ответ. Тост в UI-панели лишь подтверждает исход:
-
-Тосты относятся к самописным `@app.ui()`-панелям. В hh-mcp их нет: браузер
-запускает обычные тулзы через пикер и показывает ответ на странице хоста.
-Если понадобится свой layout или блок с результатом внутри панели, механизм
-такой: `on_success` → `SetState(key=…, value="{{ $result }}")`, затем
-`If(condition="{{ … }}")` рисует значение; `$result` доступен в scope обработчика.
-
-- **«Готово»** (`on_success`) — `tools/call` завершился без ошибок.
-- **«Ошибка»** (`on_error`) — инструмент бросил `ToolError`; тост показывает
-  **текст ошибки** через подстановку `{{ $error }}` (штатный механизм prefab:
-  рендерер кладёт сообщение ошибки вызова в scope обработчика). Например, для
-  несуществующего ID (`5690403552`) hh.ru отвечает 404, и пользователь увидит
-  `HTTP 404 …` вместо глухого «Ошибка».
+Если такая панель понадобится, механизм такой: `on_success` →
+`SetState(key=…, value="{{ $result }}")`, затем `If(condition="{{ … }}")`
+рисует значение; `$result` доступен в scope обработчика. `on_error` показывает
+**текст ошибки** через подстановку `{{ $error }}` — например, для
+несуществующего ID hh.ru отвечает 404, и пользователь увидит `HTTP 404 …`
+вместо глухого «Ошибка».
 
 ---
 
 ## 6. Генеративный интерфейс (Generative UI) — отдельная вещь
 
-Не путать `FastMCPApp` (то, что в hh-mcp) с **Generative UI**
+Не путать интерактивные инструменты (то, что в hh-mcp) с **Generative UI**
 ([gofastmcp.com/apps/generative](https://gofastmcp.com/apps/generative)):
 
-- `FastMCPApp` — разработчик **заранее пишет** компоненты (`@app.ui()`),
-  форма фиксированная.
+- Интерактивный инструмент — интерфейс описан в коде (`@mcp.tool(app=True)`
+  возвращает Prefab-компонент, либо UI вызывает backend через `FastMCPApp`).
 - Generative UI — **модель сама пишет код интерфейса на ходу**: инструмент
   `generate_prefab_ui` принимает Python-код (строку), выполняет его в песочнице
   (Pyodide) и рендерит результат как приложение.
-
-hh-mcp использует первый вариант. Оба живут поверх Prefab — библиотеки
-компонентов (`prefab_ui`), которую рендерит хост в sandboxed iframe.
 
 ---
 
 ## 7. Поток запроса целиком
 
 ```
-Модель (MCP)                            hh-mcp (FastMCPApp)
-──────────────────                      ─────────────────────
+Модель (MCP)                              hh-mcp (FastMCP)
+──────────────────                        ──────────────────
 tools/call vacancy {id}  ──►  fetch_as_markdown(hh.ru/vacancy/{id})
-                                  │
-                                  ▼
-                            Markdown-текст  ──►  ответ клиенту
+                                     │
+                                     ▼
+                       ToolResult{content: Markdown,      ──►  модели
+                                   structured_content: view}
 
 Браузер (Apps UI):
 пользователь → пикер → форма из inputSchema → POST /api/launch
-              → GET /launch → страница хоста вызывает ту же тулзу
-              с теми же аргументами → тот же tools/call
+              → GET /launch → хост вызывает ту же тулзу с теми же аргументами
+              → structuredContent.view рисуется рендерером Prefab
 ```
 
 ---
@@ -361,18 +357,19 @@ tools/call vacancy {id}  ──►  fetch_as_markdown(hh.ru/vacancy/{id})
    тулзы одни и те же, браузер запускает ту же `vacancy`/`company`/`search`,
    что и модель (см. §1.1). Отдельная `@app.ui()`-панель нужна только ради
    собственного layout'а.
-5. **«Тул возвращает JSON с двумя одинаковыми длинными строками»** — это
-   `content[0].text` и `structuredContent.result` (механизм `wrap-result`
-   fastmcp 4.x). Данные не дублируются — сам Markdown один; дублируется только
-   его сериализация в ответе (см. § 5.6).
-6. **«Инструмент не появился в веб-инструментах»** — picker показывает только
-   тулзы с `resourceUri` в `meta["ui"]` (fastmcp `cli/apps_dev.py`,
-   `_has_ui_resource`). Обычный `@app.tool()` без маркера в пикер не попадает —
-   нужен `register_tool()` (или плейсхолдер `ui://prefab/renderer.html`).
+5. **«Тулза вернула данные, а в браузере “Waiting for content…”»** — значит в
+   `structuredContent` нет `view`. Рендерер рисует только `view`; возвращайте
+   `ToolResult(content=…, structured_content=<Prefab-компонент>)` (см. §1.1).
+7. **«Вакансия вернулась как `# HeadHunter` на 12 символов»** — вакансия
+   закрыта/снята: hh.ru отдал лендинг, а не карточку. Инструмент это отвергает
+   (`MIN_CONTENT_CHARS`), чтобы не выдавать пустоту за данные.
+8. **«Инструмент не появился в веб-инструментах»** — пикер показывает тулзы с
+   `resourceUri` в `meta["ui"]`, который даёт `app=True` /
+   `app=PrefabAppConfig(...)`; обычный `@mcp.tool()` без него в пикер не попадает.
    Дополнительно: `tools/list` кешируется middleware на 5 минут, поэтому после
    изменения состава инструментов подождите TTL либо запустите с чистым
    каталогом (`HH_MCP_CACHE_DIR=/tmp/hh-cache`).
-7. **«Нажал кнопку — а результат не видно»** — в пикере ответ показывается на
+9. **«Нажал кнопку — а результат не видно»** — в пикере ответ показывается на
    странице хоста и в панели операций dev-UI; в своей `@app.ui()`-панели
    результат нужно положить в состояние через `SetState(…, "{{ $result }}")`
    (см. §5.7).
@@ -381,8 +378,9 @@ tools/call vacancy {id}  ──►  fetch_as_markdown(hh.ru/vacancy/{id})
 
 ## 9. Ссылки
 
-- FastMCPApp (официально): <https://gofastmcp.com/apps/fastmcp-app>
-- Интерактивные инструменты: <https://gofastmcp.com/apps/prefab>
+- FastMCPApp (UI вызывает backend-тулзы): <https://gofastmcp.com/apps/fastmcp-app>
+- Интерактивные инструменты (`app=True`, `ToolResult`): <https://gofastmcp.com/apps/prefab>
+- Обзор режима приложений: <https://gofastmcp.com/apps/overview>
 - Generative UI: <https://gofastmcp.com/apps/generative>
 - Быстрый старт: <https://gofastmcp.com/apps/quickstart>
 - Реализация в проекте: [`src/hh_mcp/app.py`](../src/hh_mcp/app.py)

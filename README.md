@@ -34,7 +34,7 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
   (без Redis) в [`server.py`](server.py): повторный вызов `vacancy` /
   `company` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
   (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`).
-- **343 тестов** — `uv run pytest tests/ -v` (app, fetch-модуль, guards, html,
+- **353 тестов** — `uv run pytest tests/ -v` (app, fetch-модуль, guards, html,
   links, converter, orchestrator, transport, config, errors, enrich, caching).
 
 ---
@@ -187,19 +187,33 @@ uv run fastmcp call http://127.0.0.1:8000/mcp company id=11620617 --json
 
 ## Инструменты MCP
 
-Все три инструмента зарегистрированы одинаково: `visibility: ["app", "model"]` +
-`resourceUri` Prefab-рендерера. Поэтому один и тот же инструмент доступен и
-модели по MCP, и в браузерном пикере Apps (форма генерируется из схемы).
+Все три инструмента объявлены как `@mcp.tool(app=PrefabAppConfig(visibility=["app","model"]))`
+и возвращают `ToolResult`. Это штатный механизм FastMCP Apps: один инструмент
+обслуживает и модель, и браузер — отдельных UI-инструментов не нужно.
 
-| Имя | Параметры | Описание |
-|-----|-----------|----------|
-| `vacancy` | `id: int` (строго положительный) | HTML вакансии hh.ru → Markdown. Timeout 30 с, макс. 120 000 символов |
-| `company` | `id: int` (строго положительный) | HTML страницы работодателя (компании) hh.ru → Markdown |
-| `search` | `text: str`, `page: int = 0` | Поиск вакансий на hh.ru → плоский список ID (`list[int]`). Пагинация: `page`; за пределами выдачи — пустой список |
+| Имя | Параметры | Модель получает (`content`) | Браузер рисует (`structured_content`) |
+|-----|-----------|----------------------------|--------------------------------------|
+| `vacancy` | `id: int` (строго положительный) | Markdown страницы вакансии hh.ru (timeout 30 с, макс. 120 000 символов) | `Markdown` с тем же текстом |
+| `company` | `id: int` (строго положительный) | Markdown страницы компании hh.ru | `Markdown` с тем же текстом |
+| `search` | `text: str`, `page: int = 0` | «Найдено N вакансий (страница P): …» — список ID | `DataTable` с ID (сортировка, поиск) |
+
+Как это работает: `app=PrefabAppConfig(...)` синтезирует ресурс рендерера
+`ui://prefab/tool/<hash>/renderer.html`, поэтому инструмент попадает в браузерный
+пикер, а форма ввода строится из его же JSON-схемы. `ToolResult` отдаёт модели
+текст, а рендереру — `view`, то есть обе аудитории получают своё
+([gofastmcp.com/apps/prefab](https://gofastmcp.com/apps/prefab), «Giving the
+LLM context»).
 
 **Валидация**: `id <= 0` → `ToolError("Invalid ID: …")` до HTTP-запроса.
 **Ошибки fetch** маппятся в `ToolError` (см. `_tool_error()` в
-[`app.py`](src/hh_mcp/app.py:54)).
+[`app.py`](src/hh_mcp/app.py)).
+
+**Закрытые вакансии** не 404: hh.ru редиректит на региональный лендинг
+(`kolomna.hh.ru/vrsurvey/...`), и после санитайзера остаётся один заголовок
+`# HeadHunter`. Такой ответ (тело < `MIN_CONTENT_CHARS` = 200 символов)
+отвергается с `ToolError("hh.ru returned no vacancy content … closed or
+archived vacancy redirects to a landing page")` — лучше явная ошибка, чем
+«вакансия из 12 символов».
 
 ---
 
@@ -252,7 +266,7 @@ HH_MCP_CACHE_DIR=/var/cache/hh-mcp uv run fastmcp run
 uv run pytest tests/ -v
 ```
 
-**343 тестов**, все passed. Покрытие:
+**353 тестов**, все passed. Покрытие:
 - `test_mcp_app.py` — инструменты, валидация, error mapping, UI-entry;
 - `test_caching.py` — файловый кеш: повторный id не дёргает fetch;
 - `test_enrich.py` — обогащение employer-карточки;
@@ -274,7 +288,7 @@ uv run pytest tests/ -v
 │                      hh-mcp                              │
 │  src/hh_mcp/                                             │
 │  ├── __init__.py         — версия пакета (0.1.0)         │
-│  ├── app.py              — FastMCPApp + 4 инструмента   │
+│  ├── app.py              — FastMCP + 3 инструмента (Tools)  │
 │  └── fetch/              — fetch-пайплайн (SOLID)        │
 │      ├── __init__.py     — публичное API                 │
 │      ├── config.py       — RequestConfig / NoisePolicy   │
@@ -299,9 +313,9 @@ uv run pytest tests/ -v
 ### Жизненный цикл запроса
 
 ```
-MCP Client / LLM → FastMCP (streamable HTTP / stdio) → FastMCPApp
+MCP Client / LLM / Apps UI → FastMCP (streamable HTTP / stdio)
      ↓
-Tool fn (vacancy / company)
+Tool fn (vacancy / company / search)  → ToolResult
      ↓
 fetch_as_markdown(url, timeout=30, max_chars=120_000)
      ↓
@@ -309,7 +323,9 @@ guards.py (SSRF) → transport.py (httpx2, HTTP2) → html.py (Sanitizer + Noise
      ↓
 links.py (resolve_relative_links) → converter.py (MarkItDown)
      ↓
-ToolResult → MCP Client
+ToolResult{content: текст для модели, structured_content: Prefab view для UI}
+     ↓
+MCP Client / Apps UI
 ```
 
 ### Dev-режим (нативный `fastmcp dev apps fastmcp.json`)

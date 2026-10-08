@@ -1,4 +1,9 @@
-"""Tests for the hh-mcp FastMCPApp (MCP tools + UI entry-points).
+"""Tests for the hh-mcp tools (vacancy, company, search).
+
+Covers error mapping, argument validation, and the Apps UI contract: each tool
+is declared with ``app=PrefabAppConfig(visibility=["app", "model"])`` and
+returns a ``ToolResult`` whose ``structured_content`` the Prefab renderer draws
+while the model reads ``content``.
 
 Uses the in-memory ``FastMCPTransport`` client (no network, no HTTP server).
 ``fetch_as_markdown`` is always monkeypatched — the real fetch is covered
@@ -11,7 +16,6 @@ import asyncio
 
 import pytest
 from fastmcp.exceptions import ToolError
-from fastmcp import FastMCP
 from fastmcp.client import Client
 from fastmcp.client.transports.memory import FastMCPTransport
 
@@ -35,10 +39,14 @@ from hh_mcp.fetch.errors import (
 
 
 def _fake_fetch(ok_text: str = "ok"):
-    """Build a ``fetch_as_markdown`` replacement returning *ok_text*."""
+    """Build a ``fetch_as_markdown`` replacement returning *ok_text*.
+
+    The body is padded past :data:`hh_mcp.app.MIN_CONTENT_CHARS` so it looks
+    like a real page — short bodies are rejected by the empty-page guard.
+    """
 
     def fake(url: str, **kwargs: object) -> str:
-        return f"{ok_text}: {url}"
+        return f"{ok_text}: {url}\n" + ("Тело страницы. " * 40)
 
     return fake
 
@@ -52,13 +60,10 @@ def _raising_fetch(exc: Exception):
     return fake
 
 
-def _call(tool: str, arguments: dict, *, app: object):
+def _call(tool: str, arguments: dict):
     """Connect the in-memory client and call *tool* (never raises on tool errors)."""
-    server = FastMCP("hh-mcp-test")
-    server.add_provider(app)
-
     async def _run():
-        async with Client(FastMCPTransport(server)) as client:
+        async with Client(FastMCPTransport(app_module.mcp)) as client:
             return await client.call_tool(tool, arguments, raise_on_error=False)
 
     return asyncio.run(_run())
@@ -137,14 +142,22 @@ class TestToolValidation:
 
         def fake(url: str, **kwargs: object) -> str:
             seen["url"] = url
-            return "markdown"
+            return "markdown\n" + ("Тело страницы. " * 40)
 
         monkeypatch.setattr(app_module, "fetch_as_markdown", fake)
-        assert vacancy(38185674) == "markdown"
-        assert seen["url"] == "https://hh.ru/vacancy/38185674"
 
-        assert company(9410116) == "markdown"
+        # ToolResult serves both audiences: text for the model, Prefab view
+        # for the browser (gofastmcp.com/apps/prefab).
+        result = vacancy(38185674)
+        assert seen["url"] == "https://hh.ru/vacancy/38185674"
+        assert result.content[0].text.startswith("markdown")
+        assert result.structured_content["$prefab"]["version"]
+        # Prefab wraps the view in a root Div carrying pf-app-root.
+        assert result.structured_content["view"]["type"] == "Div"
+
+        result = company(9410116)
         assert seen["url"] == "https://hh.ru/employer/9410116"
+        assert result.content[0].text.startswith("markdown")
 
 
 # --- In-memory client over FastMCPTransport ---------------------------------
@@ -155,9 +168,7 @@ class TestMcpTools:
 
     def test_tools_registered(self):
         async def _run():
-            server = FastMCP("hh-mcp-test")
-            server.add_provider(app_module.app)
-            async with Client(FastMCPTransport(server)) as client:
+            async with Client(FastMCPTransport(app_module.mcp)) as client:
                 return {t.name for t in await client.list_tools()}
 
         assert asyncio.run(_run()) == {"vacancy", "company", "search"}
@@ -171,25 +182,25 @@ class TestMcpTools:
     )
     def test_success(self, monkeypatch, tool, id_, url_frag):
         monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch("# Page"))
-        result = _call(tool, {"id": id_}, app=app_module.app)
+        result = _call(tool, {"id": id_})
         assert result.is_error is False
         assert url_frag in result.content[0].text
 
     def test_invalid_id_zero(self, monkeypatch):
         monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch())
-        result = _call("vacancy", {"id": 0}, app=app_module.app)
+        result = _call("vacancy", {"id": 0})
         assert result.is_error is True
         assert "Invalid ID: 0" in result.content[0].text
 
     def test_invalid_id_negative(self, monkeypatch):
         monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch())
-        result = _call("company", {"id": -1}, app=app_module.app)
+        result = _call("company", {"id": -1})
         assert result.is_error is True
         assert "Invalid ID: -1" in result.content[0].text
 
     def test_ssre(self, monkeypatch):
         monkeypatch.setattr(app_module, "fetch_as_markdown", _raising_fetch(SSRError()))
-        result = _call("vacancy", {"id": 123}, app=app_module.app)
+        result = _call("vacancy", {"id": 123})
         assert result.is_error is True
         assert "SSRF guard rejected the URL" in result.content[0].text
 
@@ -199,7 +210,7 @@ class TestMcpTools:
             "fetch_as_markdown",
             _raising_fetch(FetchTimeoutError("timed out")),
         )
-        result = _call("vacancy", {"id": 123}, app=app_module.app)
+        result = _call("vacancy", {"id": 123})
         assert result.is_error is True
         assert "Timeout after 30s" in result.content[0].text
 
@@ -209,7 +220,7 @@ class TestMcpTools:
             "fetch_as_markdown",
             _raising_fetch(TransportError("connection refused")),
         )
-        result = _call("vacancy", {"id": 123}, app=app_module.app)
+        result = _call("vacancy", {"id": 123})
         assert result.is_error is True
         assert "Transport error: connection refused" in result.content[0].text
 
@@ -219,12 +230,12 @@ class TestMcpTools:
             "fetch_as_markdown",
             _raising_fetch(ResponseTooLargeError("5 MiB > 4 MiB cap")),
         )
-        result = _call("vacancy", {"id": 123}, app=app_module.app)
+        result = _call("vacancy", {"id": 123})
         assert result.is_error is True
         assert "Response too large > 120000" in result.content[0].text
 
     def test_missing_id_rejected(self):
-        result = _call("vacancy", {}, app=app_module.app)
+        result = _call("vacancy", {})
         assert result.is_error is True
 
 
@@ -236,9 +247,7 @@ class TestDualRegistration:
 
     def _tools(self):
         async def _run():
-            server = FastMCP("hh-mcp-test")
-            server.add_provider(app_module.app)
-            async with Client(FastMCPTransport(server)) as client:
+            async with Client(FastMCPTransport(app_module.mcp)) as client:
                 return await client.list_tools()
 
         return {t.name: t for t in asyncio.run(_run())}
@@ -263,9 +272,7 @@ class TestDualRegistration:
 
     def test_renderer_resource_is_synthesized(self):
         async def _run():
-            server = FastMCP("hh-mcp-test")
-            server.add_provider(app_module.app)
-            async with Client(FastMCPTransport(server)) as client:
+            async with Client(FastMCPTransport(app_module.mcp)) as client:
                 return [str(r.uri) for r in await client.list_resources()]
 
         resources = asyncio.run(_run())
@@ -278,3 +285,87 @@ class TestDualRegistration:
         assert set(tools["vacancy"].input_schema["properties"]) == {"id"}
         assert set(tools["search"].input_schema["properties"]) == {"text", "page"}
         assert tools["search"].input_schema["required"] == ["text"]
+
+
+# --- search: ToolResult with a DataTable view --------------------------------
+
+
+class TestEmptyPageGuard:
+    """A closed vacancy must not be reported as a 12-character page."""
+
+    def test_stub_page_is_rejected(self, monkeypatch):
+        # hh.ru redirects closed vacancies to a landing page; after
+        # sanitization only the layout title survives.
+        monkeypatch.setattr(
+            app_module, "fetch_as_markdown", lambda url, **kw: "# HeadHunter"
+        )
+        with pytest.raises(ToolError, match="no vacancy content"):
+            vacancy(137405648)
+
+    def test_short_page_with_company_name_is_rejected(self, monkeypatch):
+        monkeypatch.setattr(
+            app_module, "fetch_as_markdown", lambda url, **kw: "# ООО Ромашка"
+        )
+        with pytest.raises(ToolError, match="no vacancy content"):
+            company(12345)
+
+    def test_real_page_passes(self, monkeypatch):
+        monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch("# Page\n" + "x" * 500))
+        assert "Page" in vacancy(138156968).content[0].text
+
+
+class TestSearchTool:
+    """search() returns IDs for the model and a sortable table for the browser."""
+
+    SERP_HTML = (
+        b'<div data-qa="serp-item__title" href="/vacancy/111"></div>'
+        b'<div data-qa="serp-item__title" href="/vacancy/222"></div>'
+        b'<a href="/vacancy/not-a-number"></a>'
+    )
+
+    def _run(self, monkeypatch, html=None):
+        monkeypatch.setattr(
+            app_module,
+            "fetch_page",
+            lambda url, **kwargs: html if html is not None else self.SERP_HTML,
+        )
+        return app_module.search("Программист 1С", page=1)
+
+    def test_returns_ids_to_model(self, monkeypatch):
+        result = self._run(monkeypatch)
+        assert "111" in result.content[0].text
+        assert "222" in result.content[0].text
+        assert "страница 1" in result.content[0].text
+
+    def test_renders_table_for_browser(self, monkeypatch):
+        result = self._run(monkeypatch)
+        view = str(result.structured_content["view"])
+        assert "'type': 'DataTable'" in view
+        assert "'id': 111" in view
+        assert "'id': 222" in view
+
+    def test_page_goes_to_query(self, monkeypatch):
+        seen: dict[str, str] = {}
+
+        def fake_page(url, **kwargs):
+            seen["url"] = url
+            return self.SERP_HTML
+
+        monkeypatch.setattr(app_module, "fetch_page", fake_page)
+        app_module.search("1С", page=7)
+        assert "text=1%D0%A1" in seen["url"]
+        assert seen["url"].endswith("&page=7")
+
+    def test_beyond_last_page_is_empty(self, monkeypatch):
+        result = self._run(monkeypatch, html=b"<html></html>")
+        assert "Ничего не найдено" in result.content[0].text
+        assert "DataTable" in str(result.structured_content["view"])
+
+    @pytest.mark.parametrize(("text", "page", "message"), [
+        ("", 0, "Invalid text"),
+        ("   ", 0, "Invalid text"),
+        ("ok", -1, "Invalid page: -1"),
+    ])
+    def test_validation(self, monkeypatch, text, page, message):
+        with pytest.raises(ToolError, match=message):
+            app_module.search(text, page)

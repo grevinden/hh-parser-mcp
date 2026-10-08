@@ -3,10 +3,10 @@
 > **Исторический план (реализация отклонилась).** Документ описывает вариант с
 > отдельными `@app.ui()`-панелями. Фактически сделано проще: инструментов три
 > (`vacancy`, `company`, `search`), каждый работает и для модели, и для браузера
-> — через `register_tool()` с маркером `ui://prefab/renderer.html` в
-> `meta["ui"]`. Актуальное устройство — в [`apps_mode.md`](apps_mode.md) §1.1
-> и в [`src/hh_mcp/app.py`](../src/hh_mcp/app.py). Имена ниже оставлены как
-> были на момент плана.
+> — документированный `@mcp.tool(app=PrefabAppConfig(...))` + `ToolResult`
+> (gofastmcp.com/apps/prefab). Актуальное устройство — в
+> [`apps_mode.md`](apps_mode.md) §1.1 и в [`src/hh_mcp/app.py`](../src/hh_mcp/app.py).
+> Имена ниже оставлены как были на момент плана.
 
 ## 1. Резюме
 
