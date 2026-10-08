@@ -7,8 +7,6 @@ __pycache__/
 
 # Secrets / local configs (never commit)
 .env
-.env.*
-.env.py
 
 # Tooling / IDE
 .idea/
