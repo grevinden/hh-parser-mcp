@@ -608,7 +608,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastmcp" },
     { name = "fastmcp", extras = ["apps"], specifier = ">=4.0.11" },
     { name = "httpx2", extras = ["http2"], specifier = ">=0.0.1" },
     { name = "markitdown", specifier = ">=0.1" },
