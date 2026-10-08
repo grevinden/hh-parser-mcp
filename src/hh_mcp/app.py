@@ -292,11 +292,15 @@ def search(text: str, page: int = 0) -> ToolResult:
     if ids:
         joined = ", ".join(str(i) for i in ids)
         summary = f"Найдено {len(ids)} вакансий (страница {page}): {joined}"
+        # The view shows the IDs in the table, so its heading carries the count
+        # only — repeating the list here would put every ID in the tool result
+        # three times (content + heading + row) instead of two.
+        heading = f"Найдено {len(ids)} вакансий (страница {page})"
     else:
-        summary = f"Ничего не найдено (страница {page})."
+        summary = heading = f"Ничего не найдено (страница {page})."
 
     with Column(gap=4, css_class="p-6 max-w-4xl mx-auto") as view:
-        Muted(summary)
+        Muted(heading)
         DataTable(
             columns=[DataTableColumn(key="id", header="Vacancy ID", sortable=True)],
             rows=[{"id": i} for i in ids],

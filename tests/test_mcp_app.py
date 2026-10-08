@@ -356,6 +356,21 @@ class TestSearchTool:
         assert "text=1%D0%A1" in seen["url"]
         assert seen["url"].endswith("&page=7")
 
+    def test_view_heading_has_no_id_list(self, monkeypatch):
+        """The table already lists the IDs, so the view must not repeat them."""
+        result = self._run(monkeypatch)
+        view = str(result.structured_content["view"])
+        assert view.count("111") == 1  # единственное вхождение — строка таблицы
+        assert view.count("222") == 1
+        assert "Найдено 2 вакансий (страница 1)" in view
+
+    def test_ids_appear_once_in_content_and_once_in_rows(self, monkeypatch):
+        """Each ID travels twice in the result: model text and table row."""
+        result = self._run(monkeypatch)
+        payload = f"{result.content[0].text}{result.structured_content}"
+        assert payload.count("111") == 2
+        assert payload.count("222") == 2
+
     def test_beyond_last_page_is_empty(self, monkeypatch):
         result = self._run(monkeypatch, html=b"<html></html>")
         assert "Ничего не найдено" in result.content[0].text

@@ -35,7 +35,7 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
   `company` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
   (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`;
   отключается флагом `HH_MCP_CACHE=0`).
-- **375 тестов** — `uv run pytest tests/ -v` (app, fetch-модуль, guards, html,
+- **377 тестов** — `uv run pytest tests/ -v` (app, fetch-модуль, guards, html,
   links, converter, orchestrator, transport, config, errors, enrich, caching).
 
 ---
@@ -328,7 +328,7 @@ Horizon читает [`fastmcp.json`](fastmcp.json) и считает его **�
 uv run pytest tests/ -v
 ```
 
-**375 тестов**, все passed. Покрытие:
+**377 тестов**, все passed. Покрытие:
 - `test_mcp_app.py` — инструменты, валидация, error mapping, UI-entry;
 - `test_caching.py` — файловый кеш: повторный id не дёргает fetch; флаг
   `HH_MCP_CACHE=0`;

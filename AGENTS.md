@@ -18,7 +18,7 @@ This file provides guidance to agents when working with code in this repository.
 - `server.py` (корень) — entry point пускателя: добавляет `ResponseCachingMiddleware` с `FileTreeStore` (файловый кеш, без Redis; каталог `~/.cache/hh-mcp`, env `HH_MCP_CACHE_DIR`; `HH_MCP_CACHE=0` — middleware не подключается, каталог не создаётся) к серверу из `hh_mcp.app.mcp`, объект `mcp` (entrypoint из `fastmcp.json`).
 - `fastmcp.json` (корень) — конфиг нативного запуска (source: `server.py` → `mcp`; deployment: transport `http`, `/mcp`; environment: `uv` + `python: 3.14` + **`project: "."`**). Поле `project` обязательно для Prefect Horizon: он считает `fastmcp.json` авторитетным и без `project`/`dependencies`/`requirements` **не ставит ничего** (сборка падает с `fastmcp is not included in your dependencies`); правки `pyproject.toml` это не лечат. Horizon игнорирует `deployment.env` (значения — только через его environment variables) и не поддерживает `environment.editable`.
 - `src/hh_mcp/fetch/` — SOLID/DIP fetch-пайплайн (10 модулей: guards, transport, html, links, converter, orchestrator, config, errors, enrich, __init__).
-- `tests/` — 11 тестовых модулей, 375 тестов.
+- `tests/` — 11 тестовых модулей, 377 тестов.
 - Удалены: `src/hh_mcp/__main__.py` (CLI `hh-mcp`, `--dev`), `src/hh_mcp/devapp.py` (свой dev UI) — dev-режим теперь нативный (`fastmcp dev apps`).
 
 ## Стек
@@ -31,7 +31,7 @@ This file provides guidance to agents when working with code in this repository.
 - `uv run fastmcp dev apps fastmcp.json` — dev-режим: MCP-сервер + браузерный UI (Prefab/AppBridge, автооткрытие браузера; флаги `--mcp-port`, `--dev-port`, `--no-reload`). Нюанс: у **этой подкоманды** `SERVER-SPEC` обязателен (`fastmcp dev apps --help` → `[required]`) — в отличие от `fastmcp run`, конфиг здесь не авто-ищется.
 - `uv run fastmcp run --transport stdio` — переопределение транспорта поверх конфига.
 - **Удалено и не воссоздавать**: console-script `hh-mcp` (`[project.scripts]`), `python -m hh_mcp`, `hh-mcp --dev` (свой dev UI в одном процессе).
-- `uv run pytest tests/ -v` — 375 passed; none `::test_name` — полный прогон.
+- `uv run pytest tests/ -v` — 377 passed; none `::test_name` — полный прогон.
 - `uv add <pkg>` — единственная установка (уходит в `pyproject.toml`); ruff/mypy молча не подключать.
 
 ## Безопасность (SSRF) — указание
