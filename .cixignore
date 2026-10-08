@@ -1,0 +1,7 @@
+.venv/
+.roo/
+.gigacode/
+tests/
+.env
+uv.lock
+*.egg-info/
