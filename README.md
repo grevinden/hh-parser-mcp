@@ -35,7 +35,7 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
   `company` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
   (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`;
   отключается флагом `HH_MCP_CACHE=0`).
-- **376 тестов** — `uv run pytest tests/ -v` (app, fetch-модуль, guards, html,
+- **375 тестов** — `uv run pytest tests/ -v` (app, fetch-модуль, guards, html,
   links, converter, orchestrator, transport, config, errors, enrich, caching).
 
 ---
@@ -270,6 +270,57 @@ HH_MCP_CACHE=0 uv run fastmcp run
 
 ---
 
+## Развёртывание на Prefect Horizon
+
+Horizon читает [`fastmcp.json`](fastmcp.json) и считает его **авторитетным**:
+он управляет установкой зависимостей и версией Python, а к `pyproject.toml`
+за пределами конфига **не возвращается**.
+
+> A configuration selects the whole environment… If the configuration declares
+> no dependencies, Horizon installs none, so list everything your server
+> imports, including `fastmcp`.
+> — [Build system](https://docs.horizon.prefect.io/platform/build-system)
+
+Поэтому в `environment` обязателен `project`:
+
+```json
+{
+  "environment": {
+    "type": "uv",
+    "python": "3.14",
+    "project": "."
+  }
+}
+```
+
+| Поле `environment` | Эффект в Horizon |
+|--------------------|------------------|
+| `project` | Ставит каталог как проект, используя лежащий рядом `uv.lock` (frozen `uv sync`) — вместе с пакетом `hh_mcp` и всеми его зависимостями |
+| `dependencies` | Ставит перечисленные пакеты (PEP 508) |
+| `requirements` | Ставит указанный requirements-файл |
+| `python` | Запрашивает версию Python; должна удовлетворять выбранному проекту |
+
+**Без `project` сборка падает** на шаге проверки зависимостей:
+`fastmcp is not included in your dependencies` — Horizon ничего не ставит и не
+находит `fastmcp`. Правка `pyproject.toml` (в т.ч. добавление `fastmcp` в
+`dependencies`) эту ошибку **не устраняет**: при наличии `fastmcp.json`
+файлы репозитория не сканируются.
+
+Что Horizon **не** поддерживает:
+
+- `deployment.env` игнорируется — значения (`HH_MCP_CACHE`, `HH_MCP_CACHE_DIR`,
+  `UPSTASH_SEARCH_REST_URL/TOKEN/INDEX`) задаются как **environment variables**
+  сервера в Horizon;
+- `environment.editable` не поддерживается — пакеты перечисляются в
+  `environment.dependencies`;
+- если в настройках сервера указан **dependency file**, он имеет приоритет над
+  `fastmcp.json` (тогда `project` игнорируется).
+
+Сборка: таймаут 15 минут; `playwright` в зависимостях не используется кодом и
+увеличивает время установки.
+
+---
+
 ## Тесты
 
 ```bash
@@ -277,7 +328,7 @@ HH_MCP_CACHE=0 uv run fastmcp run
 uv run pytest tests/ -v
 ```
 
-**376 тестов**, все passed. Покрытие:
+**375 тестов**, все passed. Покрытие:
 - `test_mcp_app.py` — инструменты, валидация, error mapping, UI-entry;
 - `test_caching.py` — файловый кеш: повторный id не дёргает fetch; флаг
   `HH_MCP_CACHE=0`;
