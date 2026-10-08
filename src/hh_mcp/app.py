@@ -36,8 +36,10 @@ __all__ = [
     "app",
     "get_vacancy",
     "get_employer",
+    "search_vacancies",
     "vacancy_app",
     "employer_app",
+    "search_app",
 ]
 
 # --- Configuration ---------------------------------------------------------
@@ -294,6 +296,55 @@ def employer_app() -> Column:
                 on_click=CallTool(
                     tool="get_employer",
                     arguments={"id": "{{ employer_id }}"},
+                    on_success=ShowToast("Готово", variant="success"),
+                    on_error=ShowToast("{{ $error }}", variant="error"),
+                ),
+            ),
+        ],
+    )
+
+
+@app.ui()
+def search_app() -> Column:
+    """Open the vacancy search panel.
+
+    Browser entry-point for :func:`search_vacancies` — the dev-UI picker
+    lists only tools carrying a Prefab ``resourceUri`` (i.e. ``@app.ui()``
+    ones), so this panel is what makes the search reachable from the web UI.
+
+    Returns
+    -------
+    Column
+        Prefab component tree: heading, hint text, query and page inputs and
+        a button that calls :func:`search_vacancies` via :class:`CallTool`.
+    """
+    text_input = Input(
+        placeholder="Поисковый запрос…", name="search_text", input_type="search"
+    )
+    page_input = Input(
+        placeholder="Номер страницы (с 0)",
+        name="search_page",
+        input_type="number",
+        value="0",
+        min=0,
+    )
+    return Column(
+        gap=4,
+        css_class="p-6 max-w-3xl mx-auto",
+        children=[
+            Heading("Поиск вакансий"),
+            Text("Введите запрос и номер страницы (с 0) — вернётся список ID."),
+            text_input,
+            page_input,
+            Button(
+                "Найти вакансии",
+                variant="default",
+                on_click=CallTool(
+                    tool="search_vacancies",
+                    arguments={
+                        "text": "{{ search_text }}",
+                        "page": "{{ search_page }}",
+                    },
                     on_success=ShowToast("Готово", variant="success"),
                     on_error=ShowToast("{{ $error }}", variant="error"),
                 ),
