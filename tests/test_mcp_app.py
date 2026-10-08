@@ -12,6 +12,7 @@ by ``tests/test_orchestrator.py``.
 from __future__ import annotations
 
 import asyncio
+from urllib.parse import parse_qs, parse_qsl, urlsplit
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -357,6 +358,54 @@ class TestSearchTool:
         app_module.search("1С", page=7)
         assert "text=1%D0%A1" in seen["url"]
         assert seen["url"].endswith("&page=7")
+
+    def test_url_has_the_exact_parameter_set(self, monkeypatch):
+        """Every drawer filter, in order, with repeated keys intact."""
+        seen: dict[str, str] = {}
+
+        def fake_page(url, **kwargs):
+            seen["url"] = url
+            return self.SERP_HTML
+
+        monkeypatch.setattr(app_module, "fetch_page", fake_page)
+        app_module.search("аналитик", page=0)
+
+        query = urlsplit(seen["url"]).query
+        pairs = parse_qsl(query, keep_blank_values=True)
+        assert pairs[0] == ("text", "аналитик")
+        assert tuple(pairs[1:-1]) == app_module.SEARCH_PARAMS
+        assert pairs[-1] == ("page", "0")
+
+    def test_url_drops_legacy_params(self, monkeypatch):
+        """The old chip-filter URL must not come back by accident."""
+        seen: dict[str, str] = {}
+
+        def fake_page(url, **kwargs):
+            seen["url"] = url
+            return self.SERP_HTML
+
+        monkeypatch.setattr(app_module, "fetch_page", fake_page)
+        app_module.search("аналитик", page=0)
+
+        query = parse_qs(urlsplit(seen["url"]).query)
+        assert "L_save_area" not in query
+        assert query["hhtmFromLabel"] == ["drawer_filter"]
+        assert query["hhtmFrom"] == ["vacancy_search_list"]
+
+    def test_operators_survive_encoding(self, monkeypatch):
+        """hh.ru query operators are percent-encoded, not mangled."""
+        seen: dict[str, str] = {}
+
+        def fake_page(url, **kwargs):
+            seen["url"] = url
+            return self.SERP_HTML
+
+        monkeypatch.setattr(app_module, "fetch_page", fake_page)
+        app_module.search('аналитик NOT продаж "точный фраз"~5 менедж* (ДМС OR ДМС+)', page=0)
+
+        assert parse_qs(urlsplit(seen["url"]).query)["text"] == [
+            'аналитик NOT продаж "точный фраз"~5 менедж* (ДМС OR ДМС+)'
+        ]
 
     def test_each_id_appears_once(self, monkeypatch):
         """Every ID occurs in the result exactly once — text only, no table."""

@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
@@ -81,6 +81,65 @@ mcp: FastMCP = FastMCP("hh-mcp", version=BUILD_ID)
 VACANCY_ID_RE = re.compile(
     r'data-qa="serp-item__title"[^>]*href="[^"]*/vacancy/(\d+)', re.M
 )
+
+SEARCH_PARAMS: tuple[tuple[str, str], ...] = (
+    ("salary_frequency", "TWICE_PER_MONTH"),
+    ("employment_form", "FULL"),
+    ("experience", "moreThan6"),
+    ("experience", "between3And6"),
+    ("experience", "between1And3"),
+    ("label", "not_from_agency"),
+    ("label", "accept_labor_contract"),
+    ("search_field", "name"),
+    ("search_field", "company_name"),
+    ("search_field", "description"),
+    ("work_format", "REMOTE"),
+    ("work_format", "ON_SITE"),
+    ("work_format", "HYBRID"),
+    ("enable_snippets", "false"),
+    ("hhtmSource", "vacancy_search_list"),
+    ("hhtmSourceLabel", "vacancy_search_list"),
+    ("hhtmFrom", "vacancy_search_list"),
+    ("hhtmFromLabel", "drawer_filter"),
+)
+"""Fixed hh.ru search parameters, in the order the site itself sends them.
+
+These are the filters of the drawer-filtered vacancy search: salary paid twice
+a month, full employment, at least a year of experience, direct employers
+(``not_from_agency``) ready to sign a labour contract, and any work format
+(remote, on-site, hybrid) across title, company name and description.
+
+They are applied to every :func:`search` call and are deliberately *not*
+exposed as tool arguments: an agent that passes them through ``text`` only
+wastes query width. The order and the repeated keys (``experience``,
+``label``, ``work_format``, ``search_field``) are part of the contract — a
+test compares the generated query pair by pair against this tuple.
+"""
+
+
+def _search_url(text: str, page: int) -> str:
+    """Build the hh.ru vacancy search URL for *text* on *page*.
+
+    Parameters
+    ----------
+    text:
+        Raw user query, sent as ``text`` with ``quote_plus`` — the search
+        operators of hh.ru (``!``, ``"``, ``~``, ``*``, ``AND``/``OR``/``NOT``)
+        survive percent-encoding unchanged.
+    page:
+        Zero-based page number, appended last.
+
+    Returns
+    -------
+    str
+        Absolute ``https://hh.ru/search/vacancy`` URL.
+    """
+    q = quote_plus(text.strip(), safe=" ")
+    return (
+        f"https://hh.ru/search/vacancy?text={q}"
+        f"&{urlencode(SEARCH_PARAMS)}"
+        f"&page={page}"
+    )
 
 
 # --- Error mapping ---------------------------------------------------------
@@ -278,16 +337,7 @@ def search(text: str, page: int = 0) -> ToolResult:
     if not isinstance(page, int) or page < 0:
         raise ToolError(f"Invalid page: {page}")
 
-    q = quote_plus(text.strip(), safe=" ")
-    url = (
-        "https://hh.ru/search/vacancy"
-        f"?text={q}"
-        "&search_field=name&search_field=company_name&search_field=description"
-        "&enable_snippets=false&hhtmFromLabel=chip_filter"
-        "&hhtmSource=vacancy_search_list&hhtmSourceLabel=vacancy_search_list"
-        "&L_save_area=true"
-        f"&page={page}"
-    )
+    url = _search_url(text, page)
 
     # Raw HTML (the IDs live in data-qa attributes), same transport and SSRF
     # guard as fetch_as_markdown.

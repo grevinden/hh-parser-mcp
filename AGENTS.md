@@ -1,5 +1,7 @@
 # AGENTS.md
 
+Читай документацию по адресу https://gofastmcp.com/llms.txt
+
 This file provides guidance to agents when working with code in this repository.
 Фиксируй изменения в git commits.
 Создавай прослеживаемую последовательность изменений.
