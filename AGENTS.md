@@ -23,7 +23,7 @@ This file provides guidance to agents when working with code in this repository.
 
 ## Стек
 - Python ≥3.14 (CPython 3.14.4); uv 0.12.17 — единственный менеджер: в `.venv` нет `pip`; `uv.lock` — существует, обязателен к коммиту.
-- Зависимости: `fastmcp 4.0.11` (4.x — НЕ 2.x/3.x), `httpx2[http2]` (Pydantic-форк; классического `httpx` в стеку нет), `markitdown`, `playwright` (импортируется нигде — зарезервирован под browser-fetch).
+- Зависимости: `fastmcp 4.0.11` (4.x — НЕ 2.x/3.x), `httpx2[http2]` (Pydantic-форк; классического `httpx` в стеку нет), `markitdown`, `prefab-ui`, `upstash-search`. `playwright` и `pydantic` из прямых зависимостей убраны: первый кодом не используется (browser-fetch не реализован), второй приходит транзитивно через fastmcp.
 
 ## Команды
 Запуск — **только через нативный пускатель fastmcp, из корня репозитория**:
