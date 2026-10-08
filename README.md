@@ -41,9 +41,9 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
   `company` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
   (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`;
   отключается флагом `HH_MCP_CACHE=0`).
-- **406 тестов** — `uv run pytest tests/ -v` (app, версия, конфиг деплоя,
-  fetch-модуль, guards, html, links, converter, orchestrator, transport,
-  config, errors, enrich, caching).
+- **429 тестов** — `uv run pytest tests/ -v` (app, версия, конфиг деплоя,
+  семантический индекс, fetch-модуль, guards, html, links, converter,
+  orchestrator, transport, config, errors, enrich, caching).
 
 ---
 
@@ -287,6 +287,38 @@ HH_MCP_CACHE=0 uv run fastmcp run
 
 ---
 
+## Семантический индекс (Upstash Search)
+
+Каждый успешный fetch вакансии или работодателя (best-effort, ошибки
+индексации никогда не видны в ответе) кладёт страницу в Upstash Search.
+Документ намеренно минимальный — столько полей, сколько нужно для поиска «по
+номеру или по смыслу»:
+
+```json
+{
+  "id": "vacancy/38185674",
+  "content": {"text": "# Ведущий программист 1С\n\nОпыт с 1С, удалённо."},
+  "metadata": {"fetched_at": "2026-10-08T16:20:31.482130+00:00"}
+}
+```
+
+- **id** — путь страницы, поэтому документ находится по номеру, работодатель
+  не collide-ится с вакансией того же номера, а URL восстанавливается как
+  `https://hh.ru/{id}`;
+- **content** — одно поле `text`: Upstash эмбедит все поля content, то есть
+  это и есть семантический индекс;
+- **metadata** — только время чтения страницы. `url`, `source` и `type` не
+  хранятся: они выводятся из id, а дубликат рано или поздно с ним разойдётся.
+
+Настройка — переменные окружения `UPSTASH_SEARCH_REST_URL`,
+`UPSTASH_SEARCH_REST_TOKEN`, `UPSTASH_SEARCH_INDEX` (по умолчанию `hh_mcp`).
+Кеш-хиты не индексируются: запись идёт только после реального чтения hh.ru.
+
+> Тесты никогда не пишут в живой индекс: `tests/conftest.py` подменяет вызов
+> на копилку и убирает `UPSTASH_SEARCH_*` из окружения.
+
+---
+
 ## Развёртывание на Prefect Horizon
 
 Horizon читает [`fastmcp.json`](fastmcp.json) и считает его **авторитетным**:
@@ -345,13 +377,18 @@ Horizon читает [`fastmcp.json`](fastmcp.json) и считает его **�
 uv run pytest tests/ -v
 ```
 
-**406 тестов**, все passed. Покрытие:
+**429 тестов**, все passed. Покрытие:
 - `test_mcp_app.py` — инструменты, валидация, error mapping, контракт «одна
   копия данных в ответе», отсутствие UI-meta;
 - `test_version.py` — версия из метаданных пакета, коммит, `BUILD_ID`,
   `runtime_info`;
 - `test_fastmcp_json.py` — конфиг деплоя: транспорт, `log_level` не `DEBUG`,
   `environment.project`, entrypoint;
+- `test_search_index.py` — форма документа в Upstash Search на фейковом
+  клиенте (id = путь страницы, content = `text`, metadata = `fetched_at`);
+- `test_indexing_guard.py` — индексация только при реальном fetch; тесты не
+  пишут в живой индекс (`tests/conftest.py` подменяет вызов и чистит
+  `UPSTASH_SEARCH_*` из окружения);
 - `test_caching.py` — файловый кеш: повторный id не дёргает fetch; флаг
   `HH_MCP_CACHE=0`;
 - `test_enrich.py` — обогащение employer-карточки;

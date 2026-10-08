@@ -10,7 +10,7 @@ This file provides guidance to agents when working with code in this repository.
 - Получение данных о вакансии + о работодателе по идентификатору vacancy_id
 - Файловый кеш ответов: повторный запрос того же id отдаётся из FileTreeStore (TTL 1 ч), hh.ru повторно не читается; кеш отключается флагом `HH_MCP_CACHE=0`, каталог — `HH_MCP_CACHE_DIR` (по умолчанию `~/.cache/hh-mcp`; удалять только при остановленном сервере)
 - Версия сборки: тулза `version()` (JSON: version, commit, build, python, fastmcp) + стандартное поле `serverInfo.version` в `initialize`; версия живёт в `pyproject.toml` и поднимается с каждым коммитом
-- Опциональная индексация страниц в Upstash Search (best-effort): успешные fetch-и вакансий/работодателей отправляются в индекс (env UPSTASH_SEARCH_REST_URL/TOKEN/INDEX), кеш-хиты не индексируются
+- Опциональная индексация страниц в Upstash Search (best-effort): успешные fetch-и вакансий/работодателей отправляются в индекс (env UPSTASH_SEARCH_REST_URL/TOKEN/INDEX), кеш-хиты не индексируются. Документ минимальный: id = путь страницы (`vacancy/38185674`, восстанавливает URL как `https://hh.ru/{id}`), content = одно поле `text` с Markdown (его и эмбедит Upstash), metadata = одно поле `fetched_at` (ISO 8601 UTC). Никаких `url`/`source`/`type` — они выводимы из id.
 
 
 ## Состояние проекта
@@ -22,7 +22,8 @@ This file provides guidance to agents when working with code in this repository.
 - `server.py` (корень) — entry point пускателя: добавляет `ResponseCachingMiddleware` с `FileTreeStore` (файловый кеш, без Redis; каталог `~/.cache/hh-mcp`, env `HH_MCP_CACHE_DIR`; `HH_MCP_CACHE=0` — middleware не подключается, каталог не создаётся) к серверу из `hh_mcp.app.mcp`, объект `mcp` (entrypoint из `fastmcp.json`).
 - `fastmcp.json` (корень) — конфиг нативного запуска (source: `server.py` → `mcp`; deployment: transport `http`, `/mcp`, `log_level: INFO` — **`DEBUG` запрещён** тестом `test_fastmcp_json.py`, он даёт `Handler called:` на каждый запрос; локальная отладка — `fastmcp run --log-level DEBUG`; environment: `uv` + `python: 3.14` + **`project: "."`**). Поле `project` обязательно для Prefect Horizon: он считает `fastmcp.json` авторитетным и без `project`/`dependencies`/`requirements` **не ставит ничего** (сборка падает с `fastmcp is not included in your dependencies`); правки `pyproject.toml` это не лечат. Horizon игнорирует `deployment.env` (значения — только через его environment variables) и не поддерживает `environment.editable`.
 - `src/hh_mcp/fetch/` — SOLID/DIP fetch-пайплайн (10 модулей: guards, transport, html, links, converter, orchestrator, config, errors, enrich, __init__).
-- `tests/` — 13 тестовых модулей, 406 тестов (в т.ч. `test_version.py`, `test_fastmcp_json.py`).
+- `tests/` — 15 тестовых модулей, 429 тестов (в т.ч. `test_version.py`, `test_fastmcp_json.py`, `test_search_index.py`, `test_indexing_guard.py`).
+- **ЖЁСТКОЕ ПРАВИЛО: тесты не пишут в живой индекс.** `tests/conftest.py` подменяет `app.index_hh_page` наRecorder-копилку (autouse) и вычищает `UPSTASH_SEARCH_*` из окружения; фикстура `indexed_pages` позволяет проверять, что индексировалось бы. Иначе фикстурный текст («Тело страницы.», «PAGEMARKER») попадает в production-индекс и портит семантический поиск.
 - Удалены: `src/hh_mcp/__main__.py` (CLI `hh-mcp`, `--dev`), `src/hh_mcp/devapp.py` (свой dev UI) — dev-режим теперь нативный (`fastmcp dev apps`); Prefab-view из `app.py` — ответ перестал дублироваться.
 
 ## Стек
@@ -35,7 +36,7 @@ This file provides guidance to agents when working with code in this repository.
 - `uv run fastmcp dev apps fastmcp.json` — dev-режим: MCP-сервер + браузерный UI (Prefab/AppBridge, автооткрытие браузера; флаги `--mcp-port`, `--dev-port`, `--no-reload`). Нюанс: у **этой подкоманды** `SERVER-SPEC` обязателен (`fastmcp dev apps --help` → `[required]`) — в отличие от `fastmcp run`, конфиг здесь не авто-ищется.
 - `uv run fastmcp run --transport stdio` — переопределение транспорта поверх конфига.
 - **Удалено и не воссоздавать**: console-script `hh-mcp` (`[project.scripts]`), `python -m hh_mcp`, `hh-mcp --dev` (свой dev UI в одном процессе).
-- `uv run pytest tests/ -v` — 406 passed; none `::test_name` — полный прогон.
+- `uv run pytest tests/ -v` — 429 passed; none `::test_name` — полный прогон.
 - `uv add <pkg>` — единственная установка (уходит в `pyproject.toml`); ruff/mypy молча не подключать.
 
 ## Безопасность (SSRF) — указание

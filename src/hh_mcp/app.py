@@ -172,7 +172,7 @@ def _fetch_markdown(url: str, *, doc_type: str | None = None, doc_id: int | None
 
     if doc_type is not None and doc_id is not None:
         try:
-            index_hh_page(doc_type=doc_type, doc_id=doc_id, url=url, md=md)
+            index_hh_page(doc_type=doc_type, doc_id=doc_id, md=md)
         except Exception:
             pass
     return md
