@@ -93,8 +93,24 @@ class TestRuntimeInfo:
 
     def test_keys_and_types(self):
         info = runtime_info()
-        assert set(info) == {"version", "commit", "build", "python", "fastmcp"}
+        assert set(info) == {
+            "version",
+            "commit",
+            "build",
+            "python",
+            "fastmcp",
+            "search",
+        }
         assert all(isinstance(v, str) for v in info.values())
+
+    def test_reports_search_backend_state(self, monkeypatch):
+        """Indexing is silent when unconfigured, so the build report names it."""
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "https://example.invalid")
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", "token")
+        assert runtime_info()["search"] == "configured"
+
+        monkeypatch.delenv("UPSTASH_SEARCH_REST_TOKEN")
+        assert runtime_info()["search"] == "missing"
 
     def test_build_agrees_with_fields(self):
         info = runtime_info()

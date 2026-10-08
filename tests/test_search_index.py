@@ -130,6 +130,29 @@ class TestDocumentShape:
         assert ids == ["vacancy/38185674", "vacancy/38185674"]
 
 
+class TestConfigured:
+    """Whether indexing can work at all, reported by the ``version`` tool."""
+
+    def test_both_variables_present(self, monkeypatch):
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "https://example.invalid")
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", "token")
+        assert search_index.configured() is True
+
+    @pytest.mark.parametrize(
+        "missing", ["UPSTASH_SEARCH_REST_URL", "UPSTASH_SEARCH_REST_TOKEN"]
+    )
+    def test_one_missing_is_not_configured(self, monkeypatch, missing):
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "https://example.invalid")
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", "token")
+        monkeypatch.delenv(missing)
+        assert search_index.configured() is False
+
+    def test_nothing_configured(self, monkeypatch):
+        monkeypatch.delenv("UPSTASH_SEARCH_REST_URL", raising=False)
+        monkeypatch.delenv("UPSTASH_SEARCH_REST_TOKEN", raising=False)
+        assert search_index.configured() is False
+
+
 class TestBestEffort:
     """Indexing never breaks a tool call."""
 

@@ -41,7 +41,7 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
   `company` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
   (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`;
   отключается флагом `HH_MCP_CACHE=0`).
-- **429 тестов** — `uv run pytest tests/ -v` (app, версия, конфиг деплоя,
+- **434 тестов** — `uv run pytest tests/ -v` (app, версия, конфиг деплоя,
   семантический индекс, fetch-модуль, guards, html, links, converter,
   orchestrator, transport, config, errors, enrich, caching).
 
@@ -213,7 +213,7 @@ uv run fastmcp call http://127.0.0.1:8000/mcp company id=11620617 --json
 | `vacancy` | `id: int` (строго положительный) | Markdown страницы вакансии hh.ru (timeout 30 с, макс. 120 000 символов) |
 | `company` | `id: int` (строго положительный) | Markdown страницы компании hh.ru |
 | `search` | `text: str`, `page: int = 0` | «Найдено N вакансий (страница P): …» — список ID |
-| `version` | — | JSON одной строкой: `version`, `commit`, `build`, `python`, `fastmcp` |
+| `version` | — | JSON одной строкой: `version`, `commit`, `build`, `python`, `fastmcp`, `search` |
 
 **Версия сборки**: `FastMCP("hh-mcp", version=BUILD_ID)` публикует значение в
 стандартном поле `serverInfo.version` ответа `initialize` — его читает любой
@@ -314,6 +314,12 @@ HH_MCP_CACHE=0 uv run fastmcp run
 `UPSTASH_SEARCH_REST_TOKEN`, `UPSTASH_SEARCH_INDEX` (по умолчанию `hh_mcp`).
 Кеш-хиты не индексируются: запись идёт только после реального чтения hh.ru.
 
+> Переменные нужно задать **в окружении развёрнутого сервера**. `fastmcp.json`
+> их не задаёт: Horizon игнорирует `deployment.env`, а `.env` из репозитория на
+> деплой не попадает. Индексация best-effort, поэтому отсутствие переменных
+> выглядит как «всё работает», а на деле ничего не пишется — за это и отвечает
+> поле `search` в ответе `version()` (`configured` / `missing`).
+
 > Тесты никогда не пишут в живой индекс: `tests/conftest.py` подменяет вызов
 > на копилку и убирает `UPSTASH_SEARCH_*` из окружения.
 
@@ -377,7 +383,7 @@ Horizon читает [`fastmcp.json`](fastmcp.json) и считает его **�
 uv run pytest tests/ -v
 ```
 
-**429 тестов**, все passed. Покрытие:
+**434 тестов**, все passed. Покрытие:
 - `test_mcp_app.py` — инструменты, валидация, error mapping, контракт «одна
   копия данных в ответе», отсутствие UI-meta;
 - `test_version.py` — версия из метаданных пакета, коммит, `BUILD_ID`,

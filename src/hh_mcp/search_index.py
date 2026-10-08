@@ -29,7 +29,7 @@ from datetime import UTC, datetime
 from pathlib import PosixPath
 from typing import Any
 
-__all__ = ["document_id", "index_hh_page"]
+__all__ = ["configured", "document_id", "index_hh_page"]
 
 
 def _fetched_at() -> str:
@@ -66,13 +66,30 @@ def document_id(doc_type: str, doc_id: int) -> str:
     return str(PosixPath(doc_type) / str(doc_id))
 
 
+def configured() -> bool:
+    """Return whether semantic indexing is switched on for this process.
+
+    Indexing is best-effort and fails silently, so a deployment with no
+    credentials looks perfectly healthy while nothing is ever written. The
+    ``version`` tool reports this flag to make that state visible.
+
+    Returns
+    -------
+    bool
+        ``True`` when both ``UPSTASH_SEARCH_REST_URL`` and
+        ``UPSTASH_SEARCH_REST_TOKEN`` are set.
+    """
+    return bool(
+        os.environ.get("UPSTASH_SEARCH_REST_URL")
+        and os.environ.get("UPSTASH_SEARCH_REST_TOKEN")
+    )
+
+
 def _client():
     try:
         from upstash_search import Search  # type: ignore[import-not-found]
 
-        url = os.environ.get("UPSTASH_SEARCH_REST_URL")
-        token = os.environ.get("UPSTASH_SEARCH_REST_TOKEN")
-        if not url or not token:
+        if not configured():
             return None
         return Search.from_env()
     except Exception:
