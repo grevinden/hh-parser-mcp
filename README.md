@@ -4,9 +4,10 @@
 [![FastMCP 4.x](https://img.shields.io/badge/FastMCP-4.x-purple)](https://github.com/PrefectHQ/fastmcp)
 [![uv](https://img.shields.io/badge/uv-0.12.x-green)](https://docs.astral.sh/uv/)
 **hh-mcp** — MCP-сервер (Model Context Protocol) для получения страниц с hh.ru
-в формате Markdown. Четыре текстовых инструмента — [`vacancy`](src/hh_mcp/app.py),
-[`company`](src/hh_mcp/app.py), [`search`](src/hh_mcp/app.py) и
-[`version`](src/hh_mcp/app.py).
+в формате Markdown. Три текстовых инструмента — [`vacancy`](src/hh_mcp/app.py),
+[`company`](src/hh_mcp/app.py) и [`search`](src/hh_mcp/app.py) — и два ресурса:
+[`search-guide`](src/hh_mcp/search_guide.py) (как составлять поисковый запрос) и
+[`version`](src/hh_mcp/app.py) (какая сборка запущена).
 
 Каждый инструмент возвращает `ToolResult` **только** с `content`: ответ несёт
 данные ровно один раз. Браузерный Apps UI отключён намеренно — встроенный в
@@ -22,12 +23,17 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
 
 ## Возможности
 
-- **4 текстовых инструмента MCP** — `vacancy`, `company`, `search`, `version`.
+- **3 текстовых инструмента MCP** — `vacancy`, `company`, `search`.
   Никакого UI в ответе: данные уходят ровно один раз (проверено на живом
   сервере — 1.04× к длине текста, `structuredContent` отсутствует).
-- **`version` + `serverInfo.version`** — сборка видна в handshake (стандартное
-  поле MCP) и отдельной тулзой, поэтому после деплоя сразу понятно, какой
-  коммит разлился. Номер версии поднимается с каждым коммитом
+- **Справочник и метаданные — ресурсами, не тулзами** — `hh-mcp://search-guide`
+  (операторы запроса hh.ru: `AND`, `OR`, `NOT`, кавычки, `~`, `*`, `NAME:`,
+  `COMPANY_NAME:`, `DESCRIPTION:`) и `hh-mcp://version`. Тулза попадает в схему
+  каждого запроса агента, и на бесполезную `version` он всё равно отвечал;
+  ресурс читают только по запросу.
+- **`serverInfo.version`** — сборка видна в handshake (стандартное поле MCP)
+  даже без чтения ресурсов, поэтому после деплоя сразу понятно, какой коммит
+  разлился. Номер версии поднимается с каждым коммитом
   (`0.2.0` в [`pyproject.toml`](pyproject.toml)).
 - **Fetch-пайплайн SOLID/DIP** — SSRF-защита, HTTP/2-транспорт (httpx2),
   HTML-санитайзер с NoisePolicy, разрешение ссылок, конвертация в Markdown
@@ -158,7 +164,7 @@ Dev-режим — отдельная подкоманда `fastmcp dev apps fas
 Dev-режим — нативный (`uv run fastmcp dev apps fastmcp.json`): MCP-сервер
 на порту 8000 (`/mcp`) + браузерный UI превью на порту 8080 (токен-URL,
 открывается автоматически). Это интерфейс **для отладки**: пикер показывает
-все четыре инструмента (`vacancy`, `company`, `search`, `version`) и строит
+все три инструмента (`vacancy`, `company`, `search`) и строит
 форму ввода из их JSON-схем; в нём же видна панель операций сервера (все вызовы
 `tools/call` с аргументами и JSON-ответами). Страницу вакансии интерфейс не
 рисует — UI-view в ответе намеренно нет, см. «Инструменты MCP».
@@ -223,11 +229,24 @@ uv run fastmcp call http://127.0.0.1:8000/mcp company id=11620617 --json
 запроса. Порядок пар и повторяющиеся ключи (`experience`, `label`,
 `work_format`, `search_field`) — часть контракта, тест сверяет сгенерированную
 строку запроса с кортежем посписочно.
-| `version` | — | JSON одной строкой: `version`, `commit`, `build`, `python`, `fastmcp`, `search`, `search_endpoint`, `search_error` |
+
+### Ресурсы
+
+| URI | Имя | Содержимое |
+|---|---|---|
+| `hh-mcp://search-guide` | `SearchGuide` | Markdown-справочник: зафиксированные фильтры, операторы поискового языка hh.ru (`!`, `"`, `~`, `*`, `AND`, `OR`, `NOT`, скобки), поиск по полям (`NAME:`, `COMPANY_NAME:`, `DESCRIPTION:`, `!ID`, `!COMPANY_ID`), рецепты и порядок работы. Текст — в [`search_guide.py`](src/hh_mcp/search_guide.py) |
+| `hh-mcp://version` | `BuildInfo` | JSON одной строкой: `version`, `commit`, `build`, `python`, `fastmcp`, `search`, `search_endpoint`, `search_error` |
+
+**Инструмент или ресурс** — не украшение, а вопрос цены в токенах: тулза
+попадает в схему каждого запроса агента, и на бесполезную `version` он всё
+равно отвечал, расходуя и контекст, и вызов. Справочник и метаданные сборки
+читаются по требованию. Всё, что делает работу на hh.ru, остаётся тулзой.
+URI ресурса назван в описании тулзы `search` — иначе агент не узнает, что он
+существует (на это есть тест).
 
 **Версия сборки**: `FastMCP("hh-mcp", version=BUILD_ID)` публикует значение в
 стандартном поле `serverInfo.version` ответа `initialize` — его читает любой
-MCP-клиент. Тулза `version` даёт то же плюс детали. Версия живёт в
+MCP-клиент. Ресурс `hh-mcp://version` даёт то же плюс детали. Версия живёт в
 `[project].version` (`pyproject.toml`) и поднимается с каждым коммитом; локально
 `BUILD_ID` выглядит как `0.3.1+dbee48e` (версия + короткий коммит), на деплое —
 просто `0.2.0`, потому что `.git` в артефакте нет.
@@ -402,17 +421,18 @@ Upstash отвергает документ, чей `content` длиннее **4
 `https://`, если схемы нет, снимаются кавычки и хвостовой слэш. Без этого httpx
 отвечает `UnsupportedProtocol` на первом же запросе — ошибка выглядит как
 «индекс не работает», хотя верен адрес. Что именно понял сервер, показывает
-`version()` → `search_endpoint` (только хост, без токена). Страница, пришедшая из
-базы, повторно не индексируется: запись идёт только после реального чтения
-hh.ru.
+ресурс `hh-mcp://version` → `search_endpoint` (только хост, без токена).
+Страница, пришедшая из базы, повторно не индексируется: запись идёт только
+после реального чтения hh.ru.
 
 > Переменные нужно задать **в окружении развёрнутого сервера**. `fastmcp.json`
 > их не задаёт: Horizon игнорирует `deployment.env`, а `.env` из репозитория на
 > деплой не попадает.
 
 Индексация best-effort: ошибка записи никогда не попадает в ответ инструмента.
-Но «тихо ничего не пишется» неотличимо от «всё работает», поэтому `version()`
-диагностирует бэкенд — поле `search` и текст ошибки в `search_error`:
+Но «тихо ничего не пишется» неотличимо от «всё работает», поэтому ресурс
+`hh-mcp://version` диагностирует бэкенд — поле `search` и текст ошибки в
+`search_error`:
 
 | `search` | Что означает |
 |---|---|
@@ -428,7 +448,7 @@ hh.ru.
 
 Порядок диагностики при жалобе «в базу ничего не пишется»:
 
-1. `version()` → `search`: не `ready`, смотрим `search_error`;
+1. `hh-mcp://version` → `search`: не `ready`, смотрим `search_error`;
 2. `search_endpoint` показывает хост, который сервер понял из окружения, —
    сравнить с хостом, который задан на самом деле;
 3. в логах искать `db cache write:` для нужного `id` — если строки нет,
@@ -499,8 +519,11 @@ uv run pytest tests/ -v
 ```
 
 **531 тест**, все passed. Покрытие:
-- `test_mcp_app.py` — инструменты, валидация, error mapping, контракт «одна
-  копия данных в ответе», отсутствие UI-meta;
+- `test_mcp_app.py` — инструменты, валидация, error mapping, точный набор
+  фильтров `search` и сохранность операторов, контракт «одна копия данных в
+  ответе», отсутствие UI-meta, регистрация и содержимое обоих ресурсов
+  (включая проверку, что `version` — не тулза, а справочник документирует все
+  операторы и все зафиксированные фильтры);
 - `test_version.py` — версия из метаданных пакета, коммит, `BUILD_ID`,
   `runtime_info`;
 - `test_fastmcp_json.py` — конфиг деплоя: транспорт, `log_level` не `DEBUG`,
@@ -561,7 +584,8 @@ uv run pytest tests/ -v
 ```
 MCP Client / LLM → FastMCP (streamable HTTP / stdio)
      ↓
-Tool fn (vacancy / company / search / version)  → ToolResult{content}
+Tool fn (vacancy / company / search)  → ToolResult{content}
+Resource fn (search-guide / version) → str
      ↓
 fetch_as_markdown(url, timeout=30, max_chars=120_000)
      ↓

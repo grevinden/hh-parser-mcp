@@ -231,7 +231,7 @@ class TestMcpTools:
             async with Client(FastMCPTransport(app_module.mcp)) as client:
                 return {t.name for t in await client.list_tools()}
 
-        assert asyncio.run(_run()) == {"vacancy", "company", "search", "version"}
+        assert asyncio.run(_run()) == {"vacancy", "company", "search"}
 
     @pytest.mark.parametrize(
         ("tool", "id_", "url_frag"),
@@ -320,8 +320,13 @@ class TestSingleCopyResponse:
 
         return asyncio.run(_run())
 
-    def test_all_four_tools_registered(self):
-        assert set(self._tools()) == {"vacancy", "company", "search", "version"}
+    def test_three_tools_registered(self):
+        assert set(self._tools()) == {"vacancy", "company", "search"}
+
+    def test_version_is_not_a_tool(self):
+        """Build metadata is a resource: an agent must not be offered a tool
+        it has no use for, on every request, forever."""
+        assert "version" not in self._tools()
 
     def test_no_ui_metadata(self):
         """Plain tools: no Prefab resourceUri and no visibility block."""
@@ -353,6 +358,107 @@ class TestSingleCopyResponse:
         assert app_module.mcp.name == "hh-mcp"
         assert app_module.mcp.version == BUILD_ID
         assert BUILD_ID.startswith(package_version())
+
+
+# --- resources ---------------------------------------------------------------
+
+
+def _resources() -> dict[str, str]:
+    """Read every resource through a real MCP client."""
+
+    async def _run() -> dict[str, str]:
+        async with Client(FastMCPTransport(app_module.mcp)) as client:
+            listed = await client.list_resources()
+            return {
+                str(r.uri): (await client.read_resource(str(r.uri)))[0].text
+                for r in listed
+            }
+
+    return asyncio.run(_run())
+
+
+class TestResources:
+    """Reference material and build facts live outside the tool list."""
+
+    def test_exactly_two_resources(self):
+        assert set(_resources()) == {"hh-mcp://version", "hh-mcp://search-guide"}
+
+    def test_version_resource_carries_build_facts(self):
+        import json
+
+        facts = json.loads(_resources()["hh-mcp://version"])
+        assert {
+            "version",
+            "commit",
+            "build",
+            "python",
+            "fastmcp",
+            "search",
+            "search_endpoint",
+            "search_error",
+        } <= set(facts)
+
+    def test_search_guide_resource_is_markdown(self):
+        guide = _resources()["hh-mcp://search-guide"]
+        assert guide.startswith("# hh.ru search")
+        assert guide == app_module.SEARCH_GUIDE_MD
+
+    def test_search_tool_points_at_the_guide(self):
+        """Without this line in the description, no agent reads the guide."""
+
+        async def _run() -> str:
+            async with Client(FastMCPTransport(app_module.mcp)) as client:
+                for tool in await client.list_tools():
+                    if tool.name == "search":
+                        return tool.description or ""
+                raise AssertionError("search tool is not registered")
+
+        assert "hh-mcp://search-guide" in asyncio.run(_run())
+
+
+class TestSearchGuideContent:
+    """The guide must keep documenting every operator hh.ru supports."""
+
+    GUIDE = app_module.SEARCH_GUIDE_MD
+
+    @pytest.mark.parametrize("operator", [
+        "AND", "OR", "NOT", "!", '"', "~", "*",
+        "NAME:", "COMPANY_NAME:", "DESCRIPTION:", "!ID", "!COMPANY_ID",
+    ])
+    def test_documents_operator(self, operator):
+        assert operator in self.GUIDE
+
+    @pytest.mark.parametrize("filter_", [
+        "salary_frequency=TWICE_PER_MONTH",
+        "employment_form=FULL",
+        "not_from_agency",
+        "accept_labor_contract",
+        "work_format",
+    ])
+    def test_documents_fixed_filter(self, filter_):
+        """The guide has to state the filters: they decide why a search is empty."""
+        assert filter_ in self.GUIDE
+
+    def test_operators_match_the_constant(self):
+        """A filter in the guide that is not in the URL, or the reverse, is a bug."""
+        for _, value in app_module.SEARCH_PARAMS:
+            if value in {"false", "vacancy_search_list", "drawer_filter"}:
+                continue
+            assert value in self.GUIDE, value
+
+    def test_written_in_english(self):
+        """Prose is for the agent and stays English; only the hh.ru query
+        examples are Russian, because that is the language they are meant to be
+        pasted in."""
+        for phrase in (
+            "Read this before calling the `search` tool.",
+            "What this server already filters out",
+            "Plain search, without operators",
+            "Search inside one field",
+            "Do not overconstrain",
+            "## Workflow",
+        ):
+            assert phrase in self.GUIDE, phrase
 
 
 # --- search: IDs for the model -----------------------------------------------

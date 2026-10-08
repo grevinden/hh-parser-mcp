@@ -1,7 +1,16 @@
-"""hh-mcp tools — hh.ru vacancies and companies.
+"""hh-mcp tools and resources — hh.ru vacancies and companies.
 
-Four text tools: :func:`vacancy`, :func:`company`, :func:`search` and
-:func:`version`.
+Three text tools — :func:`vacancy`, :func:`company` and :func:`search` — and two
+resources that carry no hh.ru data: :func:`search_guide` (how to compose the
+``search`` query) and :func:`version` (which build is running, so a deployment
+can be verified against the commit that was pushed).
+
+What is a resource and what is a tool is not decoration. A tool is advertised
+to the model with its full schema on every request: an agent pays for it in
+every prompt and, as with ``version``, keeps calling it for an answer nobody
+asked for. A resource is listed separately and read only on request. Anything
+that is reference material or build metadata belongs here; anything that does
+work on hh.ru belongs in a tool.
 
 Every tool returns :class:`ToolResult` with ``content`` and nothing else, so
 the response carries the payload exactly once. That is deliberate: a
@@ -10,9 +19,6 @@ the response carries the payload exactly once. That is deliberate: a
 would embed the same text a second time — a client walking twenty vacancy IDs
 would then pay for forty pages. See ``docs/apps_mode.md`` for the full
 reasoning and for how to bring the browser UI back.
-
-``version`` is not hh.ru data: it reports which build is running so a
-deployment can be verified against the commit that was pushed.
 """
 
 from __future__ import annotations
@@ -40,6 +46,7 @@ from hh_mcp.fetch import (
     fetch_as_markdown,
     fetch_page,
 )
+from hh_mcp.search_guide import SEARCH_GUIDE_MD, SEARCH_GUIDE_URI
 from hh_mcp.search_index import index_hh_page, read_page, search_ttl_s
 from hh_mcp.version import BUILD_ID, runtime_info
 
@@ -48,6 +55,7 @@ __all__ = [
     "vacancy",
     "company",
     "search",
+    "search_guide",
     "version",
 ]
 
@@ -390,18 +398,26 @@ def company(id: int) -> ToolResult:
 def search(text: str, page: int = 0) -> ToolResult:
     """Search hh.ru vacancies and return a flat list of vacancy IDs.
 
+    Read the ``hh-mcp://search-guide`` resource first: it documents the
+    operators this query accepts (``AND``, ``OR``, ``NOT``, ``"``, ``~``,
+    ``*``, ``NAME:``, ``COMPANY_NAME:``, ``DESCRIPTION:``) and the filters this
+    server always applies, so an empty result is not a mystery.
+
     Parameters
     ----------
     text:
-        Search query (keywords, title fragments).
+        Search query: plain keywords, optionally with hh.ru operators. Sent to
+        hh.ru as-is, percent-encoded but otherwise unchanged.
     page:
         Zero-based page number for pagination (passed as ``&page=``).
-        Beyond the last page the result is an empty list.
+        About 20 IDs per page. Beyond the last page the result is an empty
+        list.
 
     Returns
     -------
     ToolResult
-        ``content`` lists the vacancy IDs — once, with no UI copy.
+        ``content`` lists the vacancy IDs — once, with no UI copy. Use those
+        IDs with :func:`vacancy` to read the pages themselves.
     """
     if not isinstance(text, str) or not text.strip():
         raise ToolError("Invalid text: non-empty string required")
@@ -437,18 +453,55 @@ def search(text: str, page: int = 0) -> ToolResult:
     return ToolResult(content=summary)
 
 
-@mcp.tool
-def version() -> ToolResult:
+@mcp.resource(
+    "hh-mcp://version",
+    name="BuildInfo",
+    title="Build info",
+    description="Version, commit and runtime facts of the running server.",
+    mime_type="application/json",
+)
+def version() -> str:
     """Report the running build: version, commit and runtime facts.
 
-    Exists so a deployment can be verified: after a push the host redeploys on
-    its own, and this tool is the cheapest way to tell which commit is actually
-    serving traffic. The same value is published as ``serverInfo.version`` in
-    the MCP handshake, so clients that never call tools can read it too.
+    A resource, not a tool. The build facts exist so a deployment can be
+    verified after a push, and an agent has no use for them — as a tool it was
+    advertised in every prompt, described, and occasionally called, spending
+    tokens on an answer nobody asked for. A resource is read only when
+    someone wants it. The same value is still published as
+    ``serverInfo.version`` in the MCP handshake, so clients that read nothing
+    at all still know which build is serving them.
 
     Returns
     -------
-    ToolResult
-        ``content`` is a one-line JSON object with the build facts.
+    str
+        A one-line JSON object with the build facts.
     """
-    return ToolResult(content=json.dumps(runtime_info(), ensure_ascii=False))
+    return json.dumps(runtime_info(), ensure_ascii=False)
+
+
+@mcp.resource(
+    SEARCH_GUIDE_URI,
+    name="SearchGuide",
+    title="Search query guide",
+    description=(
+        "How to build the `text` argument of the search tool: the filters this "
+        "server always applies, and the hh.ru query operators (AND, OR, NOT, "
+        '"", ~, *, NAME:, COMPANY_NAME:, DESCRIPTION:). Read it before searching.'
+    ),
+    mime_type="text/markdown",
+    tags={"guide", "search"},
+)
+def search_guide() -> str:
+    """Return the hh.ru search-query guide as Markdown.
+
+    Text lives in :mod:`hh_mcp.search_guide`; this function only registers it.
+    It is a resource because it is reference material the agent reads once,
+    before composing a query — not an action with an answer. See
+    :data:`hh_mcp.search_guide.SEARCH_GUIDE_URI`.
+
+    Returns
+    -------
+    str
+        The guide in Markdown.
+    """
+    return SEARCH_GUIDE_MD
