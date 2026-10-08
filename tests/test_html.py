@@ -326,10 +326,88 @@ class TestSanitizer:
         assert "<img" not in result.html
         assert 'href="https://x.ru/"' in result.html
 
-    def test_img_with_src_kept(self, sanitizer: Sanitizer) -> None:
-        html = '<div class="keeper"><img src="logo.png" alt="Logo"></div>'
+    def test_img_with_src_dropped(self, sanitizer: Sanitizer) -> None:
+        """A picture is never content: both markup shapes go away.
+
+        hh.ru emits the same ``<img>`` in HTML5 form (``<img src=...>``)
+        and XHTML form (``<img src=... />``); both must disappear.
+        """
+        html = (
+            '<div class="keeper"><img src="logo.png" alt="Logo"></div>'
+            '<div class="keeper"><img src="photo.jpg" alt="Photo" />'
+        )
         result = sanitizer.sanitize(html)
-        assert 'src="logo.png"' in result.html
+        assert "<img" not in result.html
+        assert "logo.png" not in result.html
+        assert "photo.jpg" not in result.html
+
+    def test_img_alt_text_does_not_leak(self, sanitizer: Sanitizer) -> None:
+        """The alt text dies with the tag.
+
+        It is an attribute, so keeping the picture would mean leaving a
+        caption for something the reader cannot see.
+        """
+        html = (
+            "<main><p>До</p>"
+            '<img src="https://hhcdn.ru/i.png" alt="Мужчина и женщина">'
+            "<p>После</p></main>"
+        )
+        result = sanitizer.sanitize(html)
+        assert "Мужчина и женщина" not in result.html
+        assert "До" in result.html
+        assert "После" in result.html
+
+    def test_picture_and_source_dropped(self, sanitizer: Sanitizer) -> None:
+        """``<picture>``/``<source>`` only ever hold one more variant of
+        the same picture, so they are noise as well."""
+        html = (
+            "<main><p>До</p>"
+            '<picture><source srcset="https://hhcdn.ru/a.webp" type="image/webp">'
+            '<img src="https://hhcdn.ru/a.jpg" alt="A"></picture>'
+            "<p>После</p></main>"
+        )
+        result = sanitizer.sanitize(html)
+        assert "<picture" not in result.html
+        assert "<source" not in result.html
+        assert "hhcdn.ru" not in result.html
+        assert "До" in result.html
+        assert "После" in result.html
+
+    def test_img_inside_anchor_keeps_anchor(self, sanitizer: Sanitizer) -> None:
+        """A picture wrapped in a link leaves the link, not an empty one."""
+        html = (
+            "<main>"
+            '<a href="https://example.com/gallery">'
+            '<img src="https://hhcdn.ru/a.jpg" alt="Фото">'
+            "</a>"
+            "</main>"
+        )
+        result = sanitizer.sanitize(html)
+        assert "<img" not in result.html
+        assert 'href="https://example.com/gallery"' in result.html
+
+    def test_void_noise_does_not_silence_the_rest(self, sanitizer: Sanitizer) -> None:
+        """Regression: a void noise element must not be pushed on the
+        suppression stack.
+
+        ``<img>``/``<input>`` are noise *and* void — they have no end tag,
+        so a pushed entry would never be popped and would swallow
+        everything that follows.
+        """
+        html = (
+            "<main><p>before</p>"
+            '<form data-qa="auth-form"><input name="login"></form>'
+            "<p>after form</p>"
+            '<img src="https://hhcdn.ru/a.jpg" alt="A">'
+            "<p>after image</p>"
+            "</main>"
+        )
+        result = sanitizer.sanitize(html)
+        assert "<img" not in result.html
+        assert "<input" not in result.html
+        assert "before" in result.html
+        assert "after form" in result.html
+        assert "after image" in result.html
 
     def test_self_close_tag_reconstructed(self, sanitizer: Sanitizer) -> None:
         html = "<p>line one<br/>line two</p>"

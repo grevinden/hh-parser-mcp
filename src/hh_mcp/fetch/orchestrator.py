@@ -180,9 +180,10 @@ class FetchService:
            one level deep (employee pages carry ``/employer/`` paths, so
            recursion is impossible by construction).
         8. Link stripping (all pages): internal hh.ru Markdown/URL links
-           are removed (visible text is kept) and internal Markdown
-           images are dropped.  External links and ``hhcdn.ru`` CDN
-           images are preserved.
+           are removed (visible text is kept); external links are
+           preserved.  No image ever reaches this stage — the Sanitizer
+           drops the image elements and step 6 strips Markdown picture
+           syntax.
         9. Truncation at *max_chars* with ``...truncated...`` suffix.
 
         Args:
@@ -255,7 +256,7 @@ class FetchService:
         out = self._enrich_vacancy_card(out, url, timeout=timeout)
 
         # Strip every internal hh.ru link/URL from the final output
-        # (external links and hhcdn.ru images are preserved).
+        # (external links are preserved).
         out = remove_internal_links(out)
 
         # Truncation

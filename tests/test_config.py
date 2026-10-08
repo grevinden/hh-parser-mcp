@@ -15,6 +15,8 @@ from hh_mcp.fetch.config import (
     DEFAULT_TIMEOUT,
     DEFAULT_USER_AGENT,
     DROP_HREF_SUBSTRINGS,
+    IMAGE_ELEMENTS,
+    MARKDOWN_CONVERT_TAGS,
     MAX_BODY_BYTES_LIMIT,
     MAX_TIMEOUT,
     MIN_TIMEOUT,
@@ -180,6 +182,31 @@ class TestNoisePolicy:
         """Tag-only noise detection (attrs may be empty mapping)."""
         assert default_policy.is_noise("script", {})
         assert default_policy.is_noise("nav", {})
+
+    def test_image_elements_are_noise(self, default_policy: NoisePolicy) -> None:
+        """A picture is never content, with or without attributes."""
+        assert IMAGE_ELEMENTS == frozenset({"img", "picture", "source"})
+        assert IMAGE_ELEMENTS <= default_policy.remove_elements
+        assert default_policy.is_noise("img", {})
+        assert default_policy.is_noise(
+            "img", {"src": "https://hhcdn.ru/i.png", "alt": "Фото"}
+        )
+        assert default_policy.is_noise("picture", {})
+        assert default_policy.is_noise("source", {"srcset": "a.webp"})
+
+    def test_svg_is_noise(self, default_policy: NoisePolicy) -> None:
+        """Vector graphics are pictures too."""
+        assert default_policy.is_noise("svg", {})
+        assert default_policy.is_noise("svg", {"class": "icon"})
+
+    def test_img_not_in_convert_whitelist(self) -> None:
+        """The converter must not turn an image into Markdown.
+
+        The Sanitizer removes the tag; whitelisting ``img`` here would let
+        markdownify re-create ``![alt](src)`` for markup that survived.
+        """
+        assert "img" not in MARKDOWN_CONVERT_TAGS
+        assert {"h1", "p", "a", "li"} <= MARKDOWN_CONVERT_TAGS
 
     def test_frozen_and_slotted(self) -> None:
         policy = default_noise_policy()

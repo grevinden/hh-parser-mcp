@@ -25,6 +25,7 @@ __all__ = [
     "MarkItDownConverter",
     "default_converter",
     "normalize_markdown",
+    "strip_images",
 ]
 
 
@@ -42,6 +43,20 @@ _BLANK_LINES_RE = re.compile(r"\n{3,}")
 #: renders the URL as its own label) are rewritten to explicit Markdown
 #: links ``[url](url)``.
 _ANGLED_URL_RE = re.compile(r"<(https?://[^>\s]+)>")
+
+#: Markdown image ``![alt](src)``, with an optional title
+#: (``![alt](src "title")``).  ``alt`` may be empty (``![](src)``).
+#: The whole construct is removed, ``alt`` included: the alt text of a
+#: picture is a caption for something the reader cannot see.
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+
+#: Raw ``<img ...>`` markup left in the text by a converter that passes HTML
+#: through instead of unwrapping it.
+_RAW_IMG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+
+#: An anchor with an empty label ``[](url)`` — the shape an image-only link
+#: (``[![alt](pic)](target)``) collapses into once the picture is removed.
+_EMPTY_LINK_RE = re.compile(r"\[\s*\]\([^)]*\)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,9 +165,46 @@ class MarkItDownConverter:
 # ---------------------------------------------------------------------------
 
 
+def strip_images(markdown: str) -> str:
+    """Remove every picture from *markdown*.
+
+    Three shapes are handled, in this order:
+
+    - Markdown images ``![alt](src)`` (also ``![](src)`` and
+      ``![alt](src "title")``) — removed whole, ``alt`` text included.
+    - Raw ``<img ...>`` markup left behind by a converter that passes HTML
+      through.
+    - An anchor left with an empty label (``[](url)``), the shape an
+      image-only link ``[![alt](pic)](target)`` collapses into once its
+      picture is gone.
+
+    The Sanitizer removes image elements from the HTML long before this
+    point, so with the default converter there is normally nothing to
+    strip: this function is the *output-level* guarantee, which holds for
+    every :class:`MarkdownConverter` implementation (DIP).
+
+    The function is pure and idempotent; whitespace around a removed image
+    is left as-is (collapsing it would touch indented code blocks).
+
+    Args:
+        markdown:
+            Markdown text.
+
+    Returns:
+        str
+            Markdown text without images.
+    """
+    if not markdown:
+        return markdown
+    out = _MD_IMAGE_RE.sub("", markdown)
+    out = _RAW_IMG_RE.sub("", out)
+    return _EMPTY_LINK_RE.sub("", out)
+
+
 def normalize_markdown(markdown: str) -> str:
     """Post-process converted Markdown before it is returned to the caller.
 
+    - Remove every image (:func:`strip_images`).
     - Collapse runs of 3+ consecutive newlines into a single blank line
       (``\\n\\n``).
     - Rewrite bare CommonMark autolinks ``<https://...>`` into explicit
@@ -170,6 +222,9 @@ def normalize_markdown(markdown: str) -> str:
         str
             Normalized Markdown text.
     """
+    # Images first: a removed picture may leave a blank line behind, which
+    # the blank-line collapse then folds away.
+    markdown = strip_images(markdown)
     markdown = _BLANK_LINES_RE.sub("\\n\\n", markdown).strip()
     return _ANGLED_URL_RE.sub(r"[\1](\1)", markdown)
 

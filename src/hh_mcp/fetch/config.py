@@ -29,6 +29,7 @@ __all__ = [
     "MAX_TIMEOUT",
     "MAX_BODY_BYTES_LIMIT",
     "MARKDOWN_CONVERT_TAGS",
+    "IMAGE_ELEMENTS",
     "TRACKING_QUERY_KEYS",
     "NOISE_CLASS_TOKENS",
     "NOISE_CLASS_PREFIXES",
@@ -111,6 +112,23 @@ _SEO_TITLE_HEADING_MARKERS: tuple[str, ...] = (
 MIN_TIMEOUT = 0.001
 MAX_TIMEOUT = 300.0
 MAX_BODY_BYTES_LIMIT = 64 * 1024 * 1024  # 64 MiB
+
+# ---------------------------------------------------------------------------
+# Images
+# ---------------------------------------------------------------------------
+
+#: Elements that carry an image (or an image candidate) and are removed
+#: wholesale by the Sanitizer — a Markdown description never needs a picture.
+#:
+#: ``img``: the picture itself.  ``picture`` / ``source``: the responsive
+#: variants of the very same picture (a ``<picture>`` wrapper exists only to
+#: hold them).
+#:
+#: Removing the *tag* rather than the ``src`` is deliberate: the ``alt`` text
+#: is an attribute, so it disappears with the tag instead of surviving as a
+#: dangling word ("Мужчина и женщина" next to nothing).  ``svg`` is already
+#: noise via :data:`NoisePolicy.remove_elements`.
+IMAGE_ELEMENTS: frozenset[str] = frozenset({"img", "picture", "source"})
 
 #: Query-string keys dropped from URLs as click-tracking / analytics
 #: parameters (``utm_*`` is matched by prefix, see
@@ -267,7 +285,8 @@ class NoisePolicy:
 
     Attributes:
         remove_elements:
-            Tag names (lowercase) whose entire subtree is removed.
+            Tag names (lowercase) whose entire subtree is removed (a void
+            element carries no subtree — it is removed as a single tag).
         remove_classes:
             ``class`` tokens (e.g. ``"hidden"``) that mark an element as
             noise; matching is case-insensitive, exact token only.
@@ -315,6 +334,7 @@ class NoisePolicy:
             "textarea",
             "noindex",
         }
+        | IMAGE_ELEMENTS
     )
     remove_classes: frozenset[str] = frozenset(NOISE_CLASS_TOKENS)
     remove_class_prefixes: frozenset[str] = frozenset(NOISE_CLASS_PREFIXES)
@@ -497,13 +517,18 @@ def default_noise_policy() -> NoisePolicy:
 #: (markdownify 1.x does **not** strip non-whitelisted content).
 #: Actual noise removal (``<template>``, ``<nav>``, etc.) is the
 #: responsibility of :class:`NoisePolicy` / the Sanitizer.
+#:
+#: ``img`` is deliberately absent: the Sanitizer already removes every image
+#: element (:data:`IMAGE_ELEMENTS`), and whitelisting it here would let the
+#: converter emit ``![alt](src)`` for markup that survived — markdownify
+#: unwraps a non-whitelisted tag instead, which drops the picture whole.
 MARKDOWN_CONVERT_TAGS: frozenset[str] = frozenset(
     {
         "h1", "h2", "h3", "h4", "h5", "h6",
         "p", "br", "hr", "blockquote",
         "ul", "ol", "li",
         "strong", "b", "em", "i", "code", "pre",
-        "a", "img",
+        "a",
         "table", "thead", "tbody", "tr", "th", "td",
         "article", "section", "main", "hgroup",
     }

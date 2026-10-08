@@ -13,7 +13,11 @@ import httpx2 as httpx
 import pytest
 
 from hh_mcp.fetch.config import default_config, RequestConfig
-from hh_mcp.fetch.converter import MarkdownResult, MarkdownConverter
+from hh_mcp.fetch.converter import (
+    default_converter,
+    MarkdownResult,
+    MarkdownConverter,
+)
 from hh_mcp.fetch.errors import (
     ConversionError,
     FetchTimeoutError,
@@ -195,6 +199,46 @@ class TestFetchServiceFetchAsMarkdown:
         with pytest.raises(ParseError):
             svc.fetch_as_markdown("https://example.com")
 
+    def test_no_images_in_vacancy_output(self) -> None:
+        """A full fetch of an hh.ru-shaped page carries no picture.
+
+        The mock serves the markup hh.ru really emits (both ``<img>``
+        spellings, a ``<picture>`` block, an image-only link, an employer
+        link) and the real converter runs end to end.
+        """
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = (
+                "<html><head><title>Вакансия</title></head><body><main>"
+                "<h1>Ведущий программист</h1>"
+                '<p><img src="https://hhcdn.ru/ichameleon/1.jpg" alt="Фото офиса"></p>'
+                '<img src="https://hhcdn.ru/ichameleon/2.svg" alt="" class="tmpl_hh_head__img">'
+                "<picture>"
+                '<source srcset="https://hhcdn.ru/ichameleon/3.webp" type="image/webp">'
+                '<img src="https://hhcdn.ru/ichameleon/3.png" alt="Логотип">'
+                "</picture>"
+                '<a href="https://example.com/gallery">'
+                '<img src="https://hhcdn.ru/ichameleon/4.png" alt=""></a>'
+                '<p>Company: <a href="https://hh.ru/employer/11620617">'
+                "Ромашка</a></p>"
+                "<p>Описание вакансии.</p>"
+                "</main></body></html>"
+            )
+            return httpx.Response(200, text=body, request=request)
+
+        svc = _make_service(handler, default_converter(LOGGER))
+        result = svc.fetch_as_markdown("https://hh.ru/vacancy/138156968")
+        assert "![" not in result
+        assert "<img" not in result
+        assert "<picture" not in result
+        assert "hhcdn.ru" not in result
+        # Alt text of a removed picture must not survive as text.
+        assert "Фото офиса" not in result
+        assert "Логотип" not in result
+        # No empty link where the image-only link used to be.
+        assert "[](" not in result
+        # The text content is intact.
+        assert "Описание вакансии." in result
+
 
 def _h1_handler(title: str, h1: str) -> httpx.Response:
     """Build a 200 handler whose page has an og-style ``<title>`` and an ``<h1>``."""
@@ -316,6 +360,32 @@ class TestFetchServiceHtmlToMarkdown:
         assert len(result) <= 10 + len(suffix)
         assert suffix in result
 
+    def test_no_images_in_output(self) -> None:
+        """End-to-end: a picture-rich page yields text only.
+
+        Runs the real converter, so the whole chain (Sanitizer ->
+        markitdown -> normalize) is verified on the Markdown an agent
+        actually receives: no image, no image alt text, no empty link
+        where an image-only link used to be.
+        """
+        svc = _make_service(converter=default_converter(LOGGER))
+        result = svc.html_to_markdown(
+            "<main><p>До</p>"
+            '<img src="https://hhcdn.ru/a.jpg" alt="Фото">'
+            '<picture><source srcset="https://hhcdn.ru/a.webp">'
+            '<img src="https://hhcdn.ru/a.jpg" alt="Фото"></picture>'
+            '<a href="https://example.com/gallery">'
+            '<img src="https://hhcdn.ru/b.jpg" alt=""></a>'
+            "<p>После</p></main>"
+        )
+        assert "![" not in result
+        assert "<img" not in result
+        assert "hhcdn.ru" not in result
+        assert "Фото" not in result
+        assert "[](" not in result
+        assert "До" in result
+        assert "После" in result
+
 
 # ---------------------------
 # Vacancy enrichment
@@ -377,7 +447,7 @@ class TestVacancyEnrichment:
 
     def test_enrichment_success(self) -> None:
         """A vacancy page gets the employer card; internal links stripped,
-        externals and hhcdn.ru images preserved."""
+        external links preserved, images gone."""
         svc = _make_service(_two_page_handler, FakeConverter())
         result = svc.fetch_as_markdown("https://hh.ru/vacancy/138156968")
         # Employer card embedded under the canonical heading.
@@ -386,12 +456,16 @@ class TestVacancyEnrichment:
         assert "Мы делаем штуки. Description body." in result
         # The employer link itself was replaced by the plain name.
         assert "[Ромашка](https://hh.ru/employer/11620617)" not in result
-        # Internal links/URLs stripped (vacancy-list entry, inner image).
+        # Internal links/URLs stripped (vacancy-list entry).
         assert "https://hh.ru/vacancy/138141302" not in result
-        assert "https://hh.ru/img/inner.png" not in result
-        # External link and CDN image preserved.
+        # External link preserved.
         assert "https://example.com/resume" in result
-        assert "https://hhcdn.ru/img/logo.png" in result
+        # Images are gone even though the converter emitted them: the
+        # pipeline guarantees it for any MarkdownConverter (DIP).
+        assert "![logo]" not in result
+        assert "![inner]" not in result
+        assert "hhcdn.ru" not in result
+        assert "https://hh.ru/img/inner.png" not in result
         # The employer's own job-list section was cut from the card.
         assert "Актуальные вакансии" not in result
 

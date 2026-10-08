@@ -36,4 +36,8 @@ for url in URLS:
     import re
     internal = re.findall(r"https?://[^\s)]*hh\.ru[^\s)]*", md)
     print("remaining hh.ru urls:", internal)
+    # image scan: no picture may survive in a description
+    print("image syntax:", re.findall(r"!\[[^\]]*\]\([^)]*\)", md))
+    print("cdn image urls:", re.findall(r"https?://\S*hhcdn\S*", md))
+    print("empty links:", re.findall(r"\[\s*\]\([^)]*\)", md))
     print()

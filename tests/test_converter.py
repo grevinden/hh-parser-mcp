@@ -12,6 +12,7 @@ from hh_mcp.fetch.converter import (
     MarkdownResult,
     default_converter,
     normalize_markdown,
+    strip_images,
 )
 
 LOGGER = logging.getLogger("test")
@@ -144,6 +145,20 @@ class TestMarkItDownConverter:
         assert "* Item 1" in result.markdown
         assert "| H1 |" in result.markdown
 
+    def test_convert_does_not_emit_images(self, converter: MarkItDownConverter) -> None:
+        """``img`` is absent from the whitelist, so no picture is emitted.
+
+        A converter must never resurrect markup the Sanitizer removed.
+        """
+        html = (
+            '<p>Text</p><img src="https://hhcdn.ru/a.jpg" alt="Alt">'
+            '<a href="https://example.com/x"><img src="https://hhcdn.ru/b.jpg" alt="L"></a>'
+        )
+        result = converter.convert(html, base_url=None)
+        assert "![" not in result.markdown
+        assert "hhcdn.ru" not in result.markdown
+        assert "Text" in result.markdown
+
 
 class TestDefaultConverter:
 
@@ -202,3 +217,59 @@ class TestNormalizeMarkdown:
     def test_angled_url_in_heading(self) -> None:
         md = "# T\n\n<https://hh.ru/employer/1>"
         assert normalize_markdown(md) == "# T\n\n[https://hh.ru/employer/1](https://hh.ru/employer/1)"
+
+    def test_removes_images(self) -> None:
+        assert normalize_markdown("![Фото](https://hhcdn.ru/a.jpg)") == ""
+        assert normalize_markdown("a ![Фото](https://hhcdn.ru/a.jpg) b") == "a  b"
+
+    def test_image_only_paragraph_is_collapsed(self) -> None:
+        """A picture that was a whole block leaves no blank-line run."""
+        md = "До\n\n![Фото](https://hhcdn.ru/a.jpg)\n\nПосле"
+        assert normalize_markdown(md) == "До\n\nПосле"
+
+    def test_images_removed_with_idempotence(self) -> None:
+        once = normalize_markdown("![a](https://hhcdn.ru/a.png)\n\ntext")
+        assert normalize_markdown(once) == once
+
+
+class TestStripImages:
+    """strip_images - the output-level "no pictures" guarantee."""
+
+    def test_empty(self) -> None:
+        assert strip_images("") == ""
+
+    def test_plain_text_untouched(self) -> None:
+        text = "Описание без картинок.\n\nСсылка [текст](https://example.com)."
+        assert strip_images(text) == text
+
+    def test_markdown_image_with_alt(self) -> None:
+        assert strip_images("![Фото](https://hhcdn.ru/a.jpg)") == ""
+
+    def test_markdown_image_without_alt(self) -> None:
+        assert strip_images("![](https://hhcdn.ru/a.jpg)") == ""
+
+    def test_markdown_image_with_title(self) -> None:
+        assert strip_images('![Фото](https://hhcdn.ru/a.jpg "title")') == ""
+
+    def test_image_inside_link_leaves_no_empty_link(self) -> None:
+        md = "[![Фото](https://hhcdn.ru/a.jpg)](https://example.com/gallery)"
+        assert strip_images(md) == ""
+
+    def test_raw_img_markup(self) -> None:
+        md = 'текст <img src="https://hhcdn.ru/a.jpg" alt="Фото"> конец'
+        assert strip_images(md) == "текст  конец"
+
+    def test_link_to_image_is_not_an_image(self) -> None:
+        """A link whose target is a picture is a link: only its text shows."""
+        md = "[Скачать презентацию](https://example.com/deck.pdf)"
+        assert strip_images(md) == md
+
+    def test_idempotent(self) -> None:
+        md = "a ![x](https://hhcdn.ru/a.png) b"
+        once = strip_images(md)
+        assert strip_images(once) == once
+
+    def test_pure(self) -> None:
+        md = "![x](https://hhcdn.ru/a.png)"
+        strip_images(md)
+        assert md == "![x](https://hhcdn.ru/a.png)"

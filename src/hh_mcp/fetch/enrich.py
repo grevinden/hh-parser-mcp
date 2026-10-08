@@ -13,8 +13,10 @@ vacancy pages (spec: "employer card enrichment"):
    Markdown under an ``## About the employer: <name>`` heading, replacing
    the original employer link.
 4. :func:`remove_internal_links` — strip every link whose host is hh.ru
-   (or a job-site subdomain); external links (including ``hhcdn.ru``
-   images and third-party sites) are preserved.
+   (or a job-site subdomain); external links and third-party sites are
+   preserved.  Images are gone long before this stage (the Sanitizer drops
+   the image elements, :func:`~hh_mcp.fetch.converter.normalize_markdown`
+   strips the remaining Markdown picture syntax).
 
 All functions are pure and side-effect free; network I/O stays in the
 orchestrator (DIP).
@@ -389,7 +391,10 @@ def remove_internal_links(markdown: str) -> str:
       becomes ``Менеджер по ...``).  External links are left untouched.
     - **Markdown images** ``![](https://...hh.ru/...)`` whose source is
       internal → the whole image is dropped.  External (e.g. ``hhcdn.ru``
-      CDN) images are kept.
+      CDN) images are left alone — this function filters *links*; images
+      never reach it in the fetch pipeline (they are removed in the
+      Sanitizer and by
+      :func:`~hh_mcp.fetch.converter.normalize_markdown`).
     - **Bare / autolink URLs** (``https://...hh.ru/...`` and
       ``<https://...hh.ru/...>``) → dropped entirely; external bare URLs
       are kept.

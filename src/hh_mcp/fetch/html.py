@@ -59,20 +59,6 @@ class SanitizedDocument:
         return SanitizedDocument(html="", title=None, removed=0)
 
 
-def attrs_have_src(attrs: list[tuple[str, str | None]]) -> bool:
-    """Return True if *attrs* contains a non-empty ``src`` attribute.
-
-    Args:
-        attrs:
-            Raw attribute list as produced by
-            :meth:`html.parser.HTMLParser.handle_starttag`.
-
-    Returns:
-        True if a ``src`` attribute with a non-empty value is present.
-    """
-    return any(name.lower() == "src" and value for name, value in attrs)
-
-
 # ---------------------------------------------------------------------------
 # Sanitizer
 # ---------------------------------------------------------------------------
@@ -90,7 +76,10 @@ class _ReconstructingHtmlParser(HTMLParser):
     Suppression is tracked with a *stack* of booleans (``True`` =
     regular element, ``False`` = noise subtree), so that closing tags of
     regular elements nested inside noise (e.g. ``<ul>`` inside ``<nav>``)
-    keep the stack consistent and never leak into the output.
+    keep the stack consistent and never leak into the output.  A **void**
+    element (``<img>``, ``<input>``, ...) is never pushed — it has no
+    end tag, so a pushed entry would never be popped and would silence
+    the rest of the document.
 
     When :attr:`NoisePolicy.main_extraction` is enabled (default) the
     parser additionally runs a three-phase state machine
@@ -211,13 +200,14 @@ class _ReconstructingHtmlParser(HTMLParser):
             return
 
         if self._noise.is_noise(tag_lower, dict(attrs)):
+            if tag_lower in self._VOID_ELEMENTS:
+                # Void noise (``<img>``, ``<input>``, ...): the tag itself
+                # is all there is — no subtree, and no end tag to pop the
+                # stack with.
+                if not self._inside_noise:
+                    self._removed_count += 1
+                return
             self._push_suppressed()
-            return
-
-        if tag_lower == "img" and not attrs_have_src(attrs):
-            # Contentless <img> (no src): a CSS-driven placeholder/sprite
-            # in React markup — no content to keep, and the surrounding
-            # <a href> already carries the target URL.
             return
 
         if (
@@ -294,9 +284,6 @@ class _ReconstructingHtmlParser(HTMLParser):
         if self._noise.is_noise(tag_lower, dict(attrs)):
             if not self._inside_noise:
                 self._removed_count += 1
-            return
-
-        if tag_lower == "img" and not attrs_have_src(attrs):
             return
 
         if not self._inside_noise:
@@ -410,7 +397,11 @@ class Sanitizer:
            the content of the first ``<main>`` element (a document without
            ``<main>`` passes through unchanged).
         2. Remove ``<script>``, ``<style>`` subtrees (always).
-        3. Remove elements matching :attr:`NoisePolicy.is_noise`.
+        3. Remove elements matching :attr:`NoisePolicy.is_noise` — this
+           includes every image element
+           (:data:`~hh_mcp.fetch.config.IMAGE_ELEMENTS`), so a picture
+           never reaches the converter and its ``alt`` text never becomes
+           a dangling word.
         4. Extract text content of the first ``<title>`` tag.
         5. Resolve relative links when *base_url* is given.
 
