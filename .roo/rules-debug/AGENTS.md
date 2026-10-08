@@ -1,0 +1,10 @@
+# Project Debug Rules (Non-Obvious Only)
+
+- «Мёртвого» состояния сервера нет: единственные рабочие entry points — `uv run fastmcp run` (HTTP, `127.0.0.1:8000/mcp`) и `uv run fastmcp dev apps fastmcp.json` (+ UI на 8080), оба из корня репозитория; `python -m hh_mcp` и console-script `hh-mcp` не существуют (удалены, не воссоздавать).
+- `tests/conftest.py` ставит `HH_MCP_CACHE=0` **до** импортов — диск-кеш в тестовом процессе выключен; тесту, которому нужен middleware, строить его самому на `tmp_path` (паттерн `test_caching.py`), общий middleware на `~/.cache/hh-mcp` трогать нельзя.
+- Sync-код под `async` — через трэд-пул: `fetch/` — sync-порт Go `webfetch` (`httpx2`, `import httpx2 as httpx`), sync-клиент живёт внутри `sync def`-тулзы (fastmcp сам запускает её в трэд-пуле). «Застрявший» инструмент — сначала смотреть трэд-пул / воркеры, а не «await, который не resumes».
+- Логгер-пространства: `server._configure_logging()` вешает stderr-хендлер на `hh_mcp` и **выключает проброс** (иначе записи уходят в root без хендлера); автофикстура `conftest.py` в тестовом процессе возвращает проброс, иначе `caplog` ничего не видит.
+- `fastmcp.json` держит `log_level: "INFO"` (DEBUG запрещён `test_fastmcp_json.py` — при DEBUG логгер пишет `Handler called` на каждый запрос); для локальной отладки — `uv run fastmcp run --log-level DEBUG` (конфиг не редактировать).
+- У SSRF-гвардии известный пробел: `UrlGuard.validate` (создаётся `FetchService` сама, если `guard` не передан) проверяет только хост-string (scheme / userinfo / пустой хост / `localhost` / `.local`), DNS-резолва нет; `httpx2` сам ходит до 10 редиректов, и цель на каждом hop не ревалидируется — per-hop-проверки нет. Требования: allowlist `hh.ru` + каждый hop — см. «Безопасность (SSRF)» в корневом AGENTS.md.
+- При появлении stdio-транспорта: stdout зарезервирован под MCP JSON-RPC — любой `print()` ломает протокол; только `logging` → stderr.
+- PyCharm: SDK проекта = `.venv`; при несовпадении версии Python — сброс SDK на `.venv`, а не создание нового venv (`.venv/` и `.idea/` gitignored, локальная конфигурация).

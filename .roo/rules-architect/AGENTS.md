@@ -1,0 +1,10 @@
+# Project Architecture Rules (Non-Obvious Only)
+
+- Единый entry point — `server.py` (корень, объект `mcp`) через нативный пускатель fastmcp (`fastmcp run`, `fastmcp dev apps fastmcp.json`). `__main__.py`, console-скрипт `hh-mcp`, `devapp.py` удалены — не воссоздавать; другого пуска нет.
+- `src/hh_mcp/fetch/` — SOLID/DIP-пайплайн (10 модулей): `orchestrator.FetchService` зависит от протоколов `transport.FetchTransport` и `converter.MarkdownConverter` (DI через параметры; `guard=None` → сам создаёт `UrlGuard`); `markitdown` импортируется **только** в `converter.py` — единственная граница, на которой можно бить version lock markitdown; orchestrator ни `httpx2`, ни `markitdown` не импортирует.
+- Цепочка обращения: tools `app.py` → `search_index.read_page` (Upstash, 2-й tier, свежесть по `fetched_at`) → `fetch_as_markdown` (диск-кеш: `ResponseCachingMiddleware` + `FileTreeStore` в `server.py`, 1-й tier, TTL 1 ч) → hh.ru; успешный fetch пишется вверх по цепочке (кеш middleware + `index_hh_page`).
+- Деплой: `fastmcp.json` — авторитетный конфиг пускателя и Prefect Horizon: `environment.project: "."` обязателен (без него Horizon **не ставит ничего**), `deployment.env` игнорируется (secrets — только через env-переменные Horizon), `environment.editable` не поддерживается.
+- Лимит Upstash-дока — 4096 **байтов** UTF-8, а не символов: `split_for_storage` режет по границе UTF-8 (желательно по `\n\n`); `read_page` такую страницу не отдаёт — половина страницы не является страницей.
+- `FastMCP("hh-mcp", version=BUILD_ID)`: `version` — это `build_id()` (`<version>+<commit>`), не `__version__`; передаётся в handshake как `serverInfo.version` — по нему видно, какая сборка задеплоена.
+- Браузерный Apps UI намеренно отключён: с UI ответ дублировался, замер до/после — 2.10× / 2.17× / 4.41× → 1.04× к длине текста; вернуть можно только Prefab-view — см. `docs/apps_mode.md`; импортов `prefab_ui` в коде нет.
+- Минимальные зависимости: `fastmcp`, `httpx2[http2]`, `markitdown`, `upstash-search` (+ `pytest` в dev); `playwright`, `pydantic`, `prefab-ui`, экстра `fastmcp[apps]` убраны как неиспользуемые — не возвращать без решения.
