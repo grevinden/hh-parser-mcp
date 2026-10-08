@@ -14,11 +14,11 @@ This file provides guidance to agents when working with code in this repository.
 
 ## Состояние проекта
 - **ПРОЕКТ ПОЛНОСТЬЮ РАБОТАЕТ**: MCP-сервер + UI-инструменты `FastMCPApp`; единственный вход — нативный пускатель `fastmcp run` из корня (см. «Команды»).
-- `src/hh_mcp/app.py` — `FastMCPApp("hh-mcp")` с 4 инструментами (2 model, 2 UI).
+- `src/hh_mcp/app.py` — `FastMCPApp("hh-mcp")` с 6 инструментами (3 model: `get_vacancy`, `get_employer`, `search_vacancies`; 3 UI: `vacancy_app`, `employer_app`, `search_app`). `search_vacancies(text, page=0) -> list[int]` — парсит HTML серпа hh.ru; контракт неизменен, пагинация через `page`, за пределами выдачи — пустой список. Нюанз Apps: веб-пикер показывает только `@app.ui()`-входы (у них есть `resourceUri`), model-инструменты в нём не видны.
 - `server.py` (корень) — точка входа пускателя: собирает `FastMCP` + `add_provider(hh_mcp.app.app)` + `ResponseCachingMiddleware` с `FileTreeStore` (файловый кеш, без Redis; каталог `~/.cache/hh-mcp`, env `HH_MCP_CACHE_DIR`), объект `mcp` (entrypoint из `fastmcp.json`).
 - `fastmcp.json` (корень) — конфиг нативного запуска (source: `server.py` → `mcp`; deployment: transport `http`, `/mcp`).
 - `src/hh_mcp/fetch/` — SOLID/DIP fetch-пайплайн (10 модулей: guards, transport, html, links, converter, orchestrator, config, errors, enrich, __init__).
-- `tests/` — 11 тестовых модулей, 345 тестов.
+- `tests/` — 11 тестовых модулей, 347 тестов.
 - Удалены: `src/hh_mcp/__main__.py` (CLI `hh-mcp`, `--dev`), `src/hh_mcp/devapp.py` (свой dev UI) — dev-режим теперь нативный (`fastmcp dev apps`).
 
 ## Стек
@@ -27,11 +27,11 @@ This file provides guidance to agents when working with code in this repository.
 
 ## Команды
 Запуск — **только через нативный пускатель fastmcp, из корня репозитория**:
-- `uv run fastmcp run` — MCP-сервер по `fastmcp.json`: конфиг ищется **автоматически** в текущем каталоге, аргумент не указывать (transport `http`, `http://127.0.0.1:8000/mcp`). Работает: сервер поднимается, `/mcp` отвечает, все 4 инструмента видны клиенту.
+- `uv run fastmcp run` — MCP-сервер по `fastmcp.json`: конфиг ищется **автоматически** в текущем каталоге, аргумент не указывать (transport `http`, `http://127.0.0.1:8000/mcp`). Работает: сервер поднимается, `/mcp` отвечает, все 6 инструментов видны клиенту.
 - `uv run fastmcp dev apps fastmcp.json` — dev-режим: MCP-сервер + браузерный UI (Prefab/AppBridge, автооткрытие браузера; флаги `--mcp-port`, `--dev-port`, `--no-reload`). Нюанс: у **этой подкоманды** `SERVER-SPEC` обязателен (`fastmcp dev apps --help` → `[required]`) — в отличие от `fastmcp run`, конфиг здесь не авто-ищется.
 - `uv run fastmcp run --transport stdio` — переопределение транспорта поверх конфига.
 - **Удалено и не воссоздавать**: console-script `hh-mcp` (`[project.scripts]`), `python -m hh_mcp`, `hh-mcp --dev` (свой dev UI в одном процессе).
-- `uv run pytest tests/ -v` — 345 passed; none `::test_name` — полный прогон.
+- `uv run pytest tests/ -v` — 347 passed; none `::test_name` — полный прогон.
 - `uv add <pkg>` — единственная установка (уходит в `pyproject.toml`); ruff/mypy молча не подключать.
 
 ## Безопасность (SSRF) — указание

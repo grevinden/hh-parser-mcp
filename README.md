@@ -21,8 +21,9 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
 
 ## Возможности
 
-- **4 инструмента MCP** — 2 model-видимых (`get_vacancy`, `get_employer`) и 2
-  UI-entry (`vacancy_app`, `employer_app`) на FastMCPApp.
+- **6 инструментов MCP** — 3 model-видимых (`get_vacancy`, `get_employer`,
+  `search_vacancies`) и 3 UI-entry (`vacancy_app`, `employer_app`, `search_app`)
+  на FastMCPApp. `search_app` показывает результат поиска в панели.
 - **Fetch-пайплайн SOLID/DIP** — SSRF-защита, HTTP/2-транспорт (httpx2),
   HTML-санитайзер с NoisePolicy, разрешение ссылок, конвертация в Markdown
   (markitdown). Иерархия исключений — [`errors.py`](src/hh_mcp/fetch/errors.py).
@@ -33,7 +34,7 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
   (без Redis) в [`server.py`](server.py): повторный вызов `get_vacancy` /
   `get_employer` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
   (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`).
-- **345 тестов** — `uv run pytest tests/ -v` (app, fetch-модуль, guards, html,
+- **347 тестов** — `uv run pytest tests/ -v` (app, fetch-модуль, guards, html,
   links, converter, orchestrator, transport, config, errors, enrich, caching).
 
 ---
@@ -189,8 +190,10 @@ uv run fastmcp call http://127.0.0.1:8000/mcp get_employer id=11620617 --json
 |-----|-----------|-----------|----------|
 | `get_vacancy` | model (`@app.tool(model=True)`) | `id: int` (строго положительный) | HTML вакансии hh.ru → Markdown. Timeout 30 с, макс. 120 000 символов |
 | `get_employer` | model (`@app.tool(model=True)`) | `id: int` (строго положительный) | HTML страницы работодателя hh.ru → Markdown |
+| `search_vacancies` | model (`@app.tool(model=True)`) | `text: str`, `page: int = 0` | Поиск вакансий на hh.ru → плоский список ID (`list[int]`). Пагинация: `page`; за пределами выдачи — пустой список |
 | `vacancy_app` | UI (`@app.ui()`) | — (запрашивает ID через Prefab Input) | UI-компонент: Column с полем ID и кнопкой CallTool |
 | `employer_app` | UI (`@app.ui()`) | — | Аналогично для работодателя |
+| `search_app` | UI (`@app.ui()`) | — (запрашивает запрос и страницу) | Панель поиска: поля запроса/страницы, кнопка и блок с найденными ID |
 
 **Валидация**: `id <= 0` → `ToolError("Invalid ID: …")` до HTTP-запроса.
 **Ошибки fetch** маппятся в `ToolError` (см. `_tool_error()` в
@@ -246,7 +249,7 @@ HH_MCP_CACHE_DIR=/var/cache/hh-mcp uv run fastmcp run
 uv run pytest tests/ -v
 ```
 
-**345 тестов**, все passed. Покрытие:
+**347 тестов**, все passed. Покрытие:
 - `test_mcp_app.py` — инструменты, валидация, error mapping, UI-entry;
 - `test_caching.py` — файловый кеш: повторный id не дёргает fetch;
 - `test_enrich.py` — обогащение employer-карточки;

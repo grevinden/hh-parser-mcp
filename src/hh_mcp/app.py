@@ -14,9 +14,9 @@ from urllib.parse import quote_plus
 
 from fastmcp import FastMCPApp
 from fastmcp.exceptions import ToolError
-from prefab_ui.actions import ShowToast
+from prefab_ui.actions import SetState, ShowToast
 from prefab_ui.actions.mcp import CallTool
-from prefab_ui.components import Button, Column, Heading, Input, Text
+from prefab_ui.components import RESULT, Button, Code, Column, Heading, If, Input, Text
 
 from hh_mcp.fetch import (
     ConversionError,
@@ -53,6 +53,9 @@ MAX_CHARS: int = 120_000
 # --- Application -----------------------------------------------------------
 
 app: FastMCPApp = FastMCPApp("hh-mcp")
+
+RESULT_KEY: str = "search_result"
+"""Client-side state key holding the last :func:`search_vacancies` result."""
 
 
 # --- Error mapping ---------------------------------------------------------
@@ -315,8 +318,9 @@ def search_app() -> Column:
     Returns
     -------
     Column
-        Prefab component tree: heading, hint text, query and page inputs and
-        a button that calls :func:`search_vacancies` via :class:`CallTool`.
+        Prefab component tree: heading, hint text, query and page inputs, a
+        button that calls :func:`search_vacancies` via :class:`CallTool`, and
+        a result block showing the returned IDs.
     """
     text_input = Input(
         placeholder="Поисковый запрос…", name="search_text", input_type="search"
@@ -339,15 +343,28 @@ def search_app() -> Column:
             Button(
                 "Найти вакансии",
                 variant="default",
-                on_click=CallTool(
-                    tool="search_vacancies",
-                    arguments={
-                        "text": "{{ search_text }}",
-                        "page": "{{ search_page }}",
-                    },
-                    on_success=ShowToast("Готово", variant="success"),
-                    on_error=ShowToast("{{ $error }}", variant="error"),
-                ),
+                # Clear the previous result, then call the backend tool.
+                on_click=[
+                    SetState(key=RESULT_KEY, value=""),
+                    CallTool(
+                        tool="search_vacancies",
+                        arguments={
+                            "text": "{{ search_text }}",
+                            "page": "{{ search_page }}",
+                        },
+                        # Capture the tool result into client state so the
+                        # panel can render it (not only a toast).
+                        on_success=[
+                            SetState(key=RESULT_KEY, value=RESULT),
+                            ShowToast("Готово", variant="success"),
+                        ],
+                        on_error=ShowToast("{{ $error }}", variant="error"),
+                    ),
+                ],
+            ),
+            If(
+                condition=f"{{{{ {RESULT_KEY} }}}}",
+                children=[Code(content=f"{{{{ {RESULT_KEY} }}}}")],
             ),
         ],
     )

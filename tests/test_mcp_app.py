@@ -8,6 +8,7 @@ by ``tests/test_orchestrator.py``.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -17,7 +18,14 @@ from fastmcp.client.transports.memory import FastMCPTransport
 from prefab_ui.components import Button, Column
 
 import hh_mcp.app as app_module
-from hh_mcp.app import employer_app, get_employer, get_vacancy, vacancy_app
+from hh_mcp.app import (
+    RESULT_KEY,
+    employer_app,
+    get_employer,
+    get_vacancy,
+    search_app,
+    vacancy_app,
+)
 from hh_mcp.fetch.errors import (
     ConversionError,
     FetchTimeoutError,
@@ -266,6 +274,25 @@ class TestUiEntryPoints:
         json_dict = vacancy_app().to_json()
         assert json_dict["type"] == "Column"
         assert json_dict["children"]
+
+    def test_search_app_button_wired_to_search_tool(self):
+        col = search_app()
+        button = next(c for c in col.children if isinstance(c, Button))
+        actions = button.on_click
+        # on_click is a list: reset state, then the CallTool.
+        assert isinstance(actions, list) and len(actions) == 2
+        call = actions[1]
+        assert getattr(call, "tool", None) == "search_vacancies"
+        assert call.arguments == {"text": "{{ search_text }}", "page": "{{ search_page }}"}
+
+    def test_search_app_renders_result_block(self):
+        """Result is captured into client state and rendered, not only toasted."""
+        d = search_app().to_json()
+        serialized = json.dumps(d, ensure_ascii=False)
+        # CallTool success handler stores the tool result under RESULT_KEY
+        assert f'"key": "{RESULT_KEY}", "value": "{{{{ $result }}}}"' in serialized
+        # A conditional block renders that state back to the user
+        assert f'"content": "{{{{ {RESULT_KEY} }}}}"' in serialized
 
     def test_ui_registered_as_tool(self):
         async def _run():
