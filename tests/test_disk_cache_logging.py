@@ -21,7 +21,7 @@ from key_value.aio.stores.filetree import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from server import LoggingFileTreeStore, _approx_bytes  # noqa: E402
+from server import LoggingFileTreeStore, _approx_chars  # noqa: E402
 
 BODY = "Тело страницы. " * 40
 
@@ -37,7 +37,7 @@ def _store(tmp_path: Path) -> LoggingFileTreeStore:
     )
 
 
-class TestApproxBytes:
+class TestApproxChars:
     """Size estimates for log lines, computed without serializing."""
 
     @pytest.mark.parametrize(
@@ -52,10 +52,14 @@ class TestApproxBytes:
         ],
     )
     def test_sums_leaves(self, value, expected):
-        assert _approx_bytes(value) == expected
+        assert _approx_chars(value) == expected
 
     def test_nested_mapping(self):
-        assert _approx_bytes({"a": {"b": "xy"}}) == 4
+        assert _approx_chars({"a": {"b": "xy"}}) == 4
+
+    def test_counts_characters_not_bytes(self):
+        """Russian text: characters and bytes differ, and only chars are logged."""
+        assert _approx_chars("я" * 100) == 100
 
 
 class TestLogging:
@@ -80,6 +84,7 @@ class TestLogging:
         assert "disk cache write" in caplog.text
         assert "disk cache hit" in caplog.text
         assert "ttl=3600" in caplog.text
+        assert "chars=" in caplog.text
 
     def test_hit_reports_a_size(self, tmp_path, caplog):
         store = _store(tmp_path)
@@ -89,7 +94,7 @@ class TestLogging:
             asyncio.run(store.get("k2"))
 
         sizes = [
-            int(line.rsplit("bytes=", 1)[1].split()[0])
+            int(line.rsplit("chars=", 1)[1].split()[0])
             for line in caplog.text.splitlines()
             if "disk cache hit" in line
         ]

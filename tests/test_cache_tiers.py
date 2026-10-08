@@ -123,7 +123,7 @@ class TestTierLogging:
             vacancy(38185674)
         assert "page not in db tier" in caplog.text
         assert "page fetched from hh.ru" in caplog.text
-        assert "bytes=" in caplog.text
+        assert "chars=" in caplog.text
 
     def test_page_text_is_never_logged(self, monkeypatch, caplog):
         """A vacancy description is data, not a log line."""

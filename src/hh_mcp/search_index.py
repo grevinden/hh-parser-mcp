@@ -16,6 +16,9 @@ A document carries only what a search needs:
 - its **metadata** is one field, ``fetched_at`` — when the page was read from
   hh.ru. Nothing else: the type is already the first segment of the id and the
   URL is derived from the id, so a copy of either could only ever disagree.
+  Pages longer than Upstash's 4 KiB content limit are the exception: they are
+  split into ``vacancy/38185674``, ``vacancy/38185674~2``, … and carry ``part``
+  and ``parts`` alongside ``fetched_at``.
 
 The endpoint URL is normalized (:func:`normalize_url`) because a value copied
 between a shell, a ``.env`` file and a deployment's environment editor loses its
@@ -47,6 +50,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 __all__ = [
+    "MAX_DOC_BYTES",
+    "chunk_id",
     "configured",
     "document_id",
     "endpoint",
@@ -56,6 +61,7 @@ __all__ = [
     "normalize_url",
     "read_page",
     "search_ttl_s",
+    "split_for_storage",
     "status",
 ]
 
@@ -63,6 +69,16 @@ logger = logging.getLogger("hh_mcp.search_index")
 
 DEFAULT_TTL_S: int = 86_400
 """How long a document may serve as a cache entry: one day (override via env)."""
+
+MAX_DOC_BYTES: int = 4_096
+"""Upstash rejects a document whose ``content`` exceeds this many UTF-8 bytes.
+
+The limit is counted in bytes, not characters: a Russian vacancy description of
+6 294 characters weighs 6 461 bytes and is refused with
+``UpstashError: Content is too long: 6461, max: 4096``. A page that does not fit
+is split into parts rather than truncated — half a description is worse to search
+than all of it.
+"""
 
 _LAST_ERROR: str | None = None
 """Last failure seen while building the client or writing a document."""
@@ -324,8 +340,103 @@ def status() -> dict[str, Any]:
     return {"state": "ready", "error": None}
 
 
+def chunk_id(doc_id: str, part: int) -> str:
+    """Return the document id of one part of a page.
+
+    The first part keeps the plain page id, because that id is what the database
+    cache tier reads back and what a URL is derived from. Further parts get a
+    ``~`` suffix: ``vacancy/38185674`` and ``vacancy/38185674~2``.
+
+    Parameters
+    ----------
+    doc_id:
+        Page document id, e.g. ``"vacancy/38185674"``.
+    part:
+        1-based part number.
+
+    Returns
+    -------
+    str
+        ``doc_id`` for part 1, ``f"{doc_id}~{part}"`` afterwards.
+    """
+    return doc_id if part <= 1 else f"{doc_id}~{part}"
+
+
+def split_for_storage(md: str, max_bytes: int = MAX_DOC_BYTES) -> list[str]:
+    """Split a page into parts Upstash will accept.
+
+    Parts are cut on UTF-8 boundaries and, where possible, on a paragraph break,
+    so each part embeds as a coherent piece of text. Concatenating the parts
+    reproduces the page exactly — nothing is dropped, unlike truncation.
+
+    Parameters
+    ----------
+    md:
+        Full page content as Markdown.
+    max_bytes:
+        Maximum size of one part in UTF-8 bytes.
+
+    Returns
+    -------
+    list[str]
+        One element for a page that fits, otherwise as many as needed. Never
+        empty: empty input yields ``[""]``.
+
+    Raises
+    ------
+    ValueError
+        If ``max_bytes`` is too small to hold a single character.
+    """
+    if len(md.encode()) <= max_bytes:
+        return [md]
+
+    parts: list[str] = []
+    rest = md
+    while rest:
+        cut = _cut_point(rest, max_bytes)
+        parts.append(rest[:cut])
+        rest = rest[cut:]
+    return parts
+
+
+def _cut_point(text: str, max_bytes: int) -> int:
+    """Return how many characters of *text* fit in *max_bytes*, on a boundary.
+
+    Parameters
+    ----------
+    text:
+        Remaining page text; must be longer than ``max_bytes`` bytes.
+    max_bytes:
+        Size budget for one part, in UTF-8 bytes.
+
+    Returns
+    -------
+    int
+        Character count to cut at. Never splits a character: when even one
+        character exceeds the budget the first character is taken whole and
+        Upstash's own error stays the single source of truth for that case.
+    """
+    # Byte-prefix decoded with errors="ignore" drops a character the cut split
+    # in half, so the count is exactly how many whole characters fit.
+    length = len(text.encode()[:max_bytes].decode(errors="ignore"))
+    if length <= 0:
+        return 1
+    # Prefer a paragraph break in the last third of the part.
+    floor = length * 2 // 3
+    for marker in ("\n\n", "\n"):
+        position = text.rfind(marker, floor, length)
+        if position > 0:
+            return position + len(marker)
+    return length
+
+
 def index_hh_page(*, doc_type: str, doc_id: int, md: str) -> None:
     """Upsert a single hh.ru page into Upstash Search (best-effort).
+
+    A page longer than :data:`MAX_DOC_BYTES` is written as several documents —
+    part 1 under the page id, the rest under ``~2``, ``~3``. All of it stays
+    searchable; only the database *cache* tier is limited to single-part pages,
+    since it must hand back the page whole (see :func:`read_page`).
 
     Parameters
     ----------
@@ -341,19 +452,50 @@ def index_hh_page(*, doc_type: str, doc_id: int, md: str) -> None:
     if client is None:
         logger.info("db tier write skipped: id=%s backend unavailable", key)
         return
+
+    parts = split_for_storage(md)
+    fetched_at = _fetched_at()
+    documents: list[dict[str, Any]] = []
+    for number, part in enumerate(parts, start=1):
+        metadata: dict[str, Any] = {"fetched_at": fetched_at}
+        if len(parts) > 1:
+            metadata["part"] = number
+            metadata["parts"] = len(parts)
+        documents.append(
+            {
+                "id": chunk_id(key, number),
+                "content": {"text": part},
+                "metadata": metadata,
+            }
+        )
+
     try:
-        idx = client.index(index_name())
-        document: dict[str, Any] = {
-            "id": key,
-            "content": {"text": md},
-            "metadata": {"fetched_at": _fetched_at()},
-        }
-        idx.upsert(documents=[document])
+        client.index(index_name()).upsert(documents=documents)
     except Exception as exc:
         # Never propagate indexing errors to tool results, but keep them.
         logger.warning("db tier write failed: id=%s %s", key, _remember(exc))
         return
-    logger.info("db cache write: id=%s bytes=%d", key, len(md))
+    if len(parts) == 1:
+        logger.info(
+            "db cache write: id=%s chars=%d bytes=%d",
+            key,
+            len(md),
+            len(md.encode()),
+        )
+        return
+    logger.info(
+        "db cache write: id=%s chars=%d bytes=%d parts=%d (largest part %d bytes, limit %d)",
+        key,
+        len(md),
+        len(md.encode()),
+        len(parts),
+        max(len(part.encode()) for part in parts),
+        MAX_DOC_BYTES,
+    )
+    logger.info(
+        "db tier: id=%s is split, so it will not be served from the cache tier",
+        key,
+    )
 
 
 def _age_seconds(metadata: dict[str, Any] | None) -> float | None:
@@ -425,6 +567,20 @@ def read_page(*, doc_type: str, doc_id: int, max_age_s: int | None = None) -> st
         logger.info("db cache miss: id=%s document has no text", key)
         return None
 
+    try:
+        parts = int((document.metadata or {}).get("parts") or 1)
+    except (TypeError, ValueError):
+        # Metadata came from a document someone else may have written.
+        parts = 1
+    if parts > 1:
+        # Part 1 of a split page: searchable, but a cache answer must be whole.
+        logger.info(
+            "db cache miss: id=%s split into %s parts, cache needs the whole page",
+            key,
+            parts,
+        )
+        return None
+
     age = _age_seconds(document.metadata)
     if age is None:
         logger.info("db cache miss: id=%s no readable fetched_at", key)
@@ -438,5 +594,5 @@ def read_page(*, doc_type: str, doc_id: int, max_age_s: int | None = None) -> st
         )
         return None
 
-    logger.info("db cache hit: id=%s bytes=%d age=%.0fs", key, len(text), age)
+    logger.info("db cache hit: id=%s chars=%d age=%.0fs", key, len(text), age)
     return text

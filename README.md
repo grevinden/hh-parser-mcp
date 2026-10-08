@@ -41,7 +41,7 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
   `company` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
   (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`;
   отключается флагом `HH_MCP_CACHE=0`).
-- **506 тестов** — `uv run pytest tests/ -v` (app, версия, конфиг деплоя,
+- **531 тест** — `uv run pytest tests/ -v` (app, версия, конфиг деплоя,
   семантический индекс, fetch-модуль, guards, html, links, converter,
   orchestrator, transport, config, errors, enrich, caching).
 
@@ -219,7 +219,7 @@ uv run fastmcp call http://127.0.0.1:8000/mcp company id=11620617 --json
 стандартном поле `serverInfo.version` ответа `initialize` — его читает любой
 MCP-клиент. Тулза `version` даёт то же плюс детали. Версия живёт в
 `[project].version` (`pyproject.toml`) и поднимается с каждым коммитом; локально
-`BUILD_ID` выглядит как `0.2.0+113e522` (версия + короткий коммит), на деплое —
+`BUILD_ID` выглядит как `0.3.1+dbee48e` (версия + короткий коммит), на деплое —
 просто `0.2.0`, потому что `.git` в артефакте нет.
 
 **Валидация**: `id <= 0` → `ToolError("Invalid ID: …")` до HTTP-запроса.
@@ -274,15 +274,26 @@ http://127.0.0.1:8000/mcp
 читаются по идентификатору (`fetch(ids=["vacancy/38185674"])`). Свежесть
 проверяется по записанному `fetched_at`: старый документ пропускается, и
 непроверяемый (без метки) тоже — свежесть должна быть доказуемой. TTL задаётся
-`HH_MCP_SEARCH_TTL_S` (по умолчанию `86400` секунд).
+`HH_MCP_SEARCH_TTL_S` (по умолчанию `86400` секунд). Страницы длиннее 4 КиБ
+хранятся частями и из базы не отдаются: половина страницы — не страница.
 
 **Порядок чтения** виден в логе — каждая строка говорит, кто ответил:
 
 ```
 INFO: disk cache miss: key=dba9f90f…
-INFO: db cache hit: id=employer/671766 bytes=2129 age=54s
+INFO: db cache hit: id=employer/671766 chars=2129 age=54s
 INFO: page served from db tier: url=https://hh.ru/employer/671766
-INFO: disk cache write: key=dba9f90f… bytes=2214 ttl=3600
+INFO: disk cache write: key=dba9f90f… chars=2214 ttl=3600
+```
+
+Разбитая на части страница (см. «Индексация в Upstash Search») из базы **не
+отдаётся** — часть не является страницей:
+
+```
+INFO: db cache miss: id=vacancy/138156968 split into 5 parts, cache needs the whole page
+INFO: page fetched from hh.ru: url=https://hh.ru/vacancy/138156968 chars=6289
+INFO: db cache write: id=vacancy/138156968 chars=6289 bytes=10911 parts=5 (largest part 4095 bytes, limit 4096)
+INFO: db tier: id=vacancy/138156968 is split, so it will not be served from the cache tier
 ```
 
 При промахе обоих уровней:
@@ -291,12 +302,14 @@ INFO: disk cache write: key=dba9f90f… bytes=2214 ttl=3600
 INFO: disk cache miss: key=80f5072a…
 INFO: db cache miss: id=employer/2163044 no document
 INFO: page not in db tier, going to hh.ru: url=https://hh.ru/employer/2163044
-INFO: page fetched from hh.ru: url=https://hh.ru/employer/2163044 bytes=3027
-INFO: db cache write: id=employer/2163044 bytes=3027
-INFO: disk cache write: key=80f5072a… bytes=3112 ttl=3600
+INFO: page fetched from hh.ru: url=https://hh.ru/employer/2163044 chars=3027
+INFO: db cache write: id=employer/2163044 chars=3027 bytes=3726
+INFO: disk cache write: key=80f5072a… chars=3112 ttl=3600
 ```
 
-Текст страницы в лог не попадает — только идентификатор и размер.
+Текст страницы в лог не попадает — только идентификатор и размер. `chars=` —
+символы, `bytes=` — вес в UTF-8: для русского текста это разные числа, а
+Upstash считает именно байты, поэтому в строке записи указаны оба.
 
 ```bash
 # Пример: другой каталог дискового кеша
@@ -349,7 +362,14 @@ HH_MCP_SEARCH_TTL_S=3600 uv run fastmcp run
 
 Настройка — переменные окружения `UPSTASH_SEARCH_REST_URL`,
 `UPSTASH_SEARCH_REST_TOKEN`, `UPSTASH_SEARCH_INDEX` (по умолчанию `hh_mcp`).
-Значение URL нормализуется (`search_index.normalize_url`): подставляется
+Upstash отвергает документ, чей `content` длиннее **4096 байт UTF-8**, поэтому
+страница разбивается на части: часть 1 лежит под обычным id страницы
+(`vacancy/138156968`), остальные — с суффиксом (`vacancy/138156968~2`), и в
+`metadata` добавляются `part` и `parts`. Разрез идёт по границе UTF-8 и, где
+возможно, по границе абзаца; склейка частей даёт страницу байт в байт. Обрезать
+текст нельзя — потерянный хвост описания не ищется.
+
+Значение URL нормализуются (`search_index.normalize_url`): подставляется
 `https://`, если схемы нет, снимаются кавычки и хвостовой слэш. Без этого httpx
 отвечает `UnsupportedProtocol` на первом же запросе — ошибка выглядит как
 «индекс не работает», хотя верен адрес. Что именно понял сервер, показывает
@@ -449,7 +469,7 @@ Horizon читает [`fastmcp.json`](fastmcp.json) и считает его **�
 uv run pytest tests/ -v
 ```
 
-**506 тестов**, все passed. Покрытие:
+**531 тест**, все passed. Покрытие:
 - `test_mcp_app.py` — инструменты, валидация, error mapping, контракт «одна
   копия данных в ответе», отсутствие UI-meta;
 - `test_version.py` — версия из метаданных пакета, коммит, `BUILD_ID`,

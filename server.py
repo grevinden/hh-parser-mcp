@@ -100,7 +100,7 @@ def _configure_logging() -> None:
     namespace.propagate = False
 
 
-def _approx_bytes(value: Any) -> int:
+def _approx_chars(value: Any) -> int:
     """Return a cheap size estimate for log lines, without serializing.
 
     Parameters
@@ -112,14 +112,16 @@ def _approx_bytes(value: Any) -> int:
     Returns
     -------
     int
-        Sum of the string lengths of every leaf, plus mapping keys.
+        Sum of the string lengths of every leaf, plus mapping keys, in
+        characters — the unit a log line comparing sizes must use, because the
+        index write counts bytes and the two differ for Russian text.
     """
     if isinstance(value, str):
         return len(value)
     if isinstance(value, Mapping):
-        return sum(len(str(key)) + _approx_bytes(item) for key, item in value.items())
+        return sum(len(str(key)) + _approx_chars(item) for key, item in value.items())
     if isinstance(value, (list, tuple)):
-        return sum(_approx_bytes(item) for item in value)
+        return sum(_approx_chars(item) for item in value)
     return len(str(value))
 
 
@@ -166,7 +168,7 @@ class LoggingFileTreeStore(FileTreeStore):
             self._logger.info("disk cache miss: key=%s", key)
         else:
             self._logger.info(
-                "disk cache hit: key=%s bytes=%d", key, _approx_bytes(value)
+                "disk cache hit: key=%s chars=%d", key, _approx_chars(value)
             )
         return value
 
@@ -186,9 +188,9 @@ class LoggingFileTreeStore(FileTreeStore):
         """
         await super().put(key, value, **kwargs)
         self._logger.info(
-            "disk cache write: key=%s bytes=%d ttl=%s",
+            "disk cache write: key=%s chars=%d ttl=%s",
             key,
-            _approx_bytes(value),
+            _approx_chars(value),
             kwargs.get("ttl"),
         )
 

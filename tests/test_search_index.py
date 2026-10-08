@@ -30,8 +30,10 @@ class FakeIndex:
     def __init__(self, name: str) -> None:
         self.name = name
         self.upserted: list[Any] = []
+        self.upserts: int = 0
 
     def upsert(self, *, documents: Any) -> None:
+        self.upserts += 1
         self.upserted.extend(documents)
 
 
@@ -109,6 +111,13 @@ class TestDocumentShape:
             index_hh_page(doc_type="vacancy", doc_id=38185674, md=MD)
         assert "db cache write" in caplog.text
         assert "vacancy/38185674" in caplog.text
+
+    def test_write_logs_characters_and_bytes(self, wired: FakeIndex, caplog):
+        """Russian text: the two units differ, and both are named."""
+        with caplog.at_level("INFO", logger="hh_mcp.search_index"):
+            index_hh_page(doc_type="vacancy", doc_id=38185674, md="я" * 100)
+        # 100 Cyrillic characters weigh 200 UTF-8 bytes: both are named.
+        assert "chars=100 bytes=200" in caplog.text
 
     def test_id_is_the_url_path(self, wired: FakeIndex):
         index_hh_page(doc_type="vacancy", doc_id=38185674, md=MD)
@@ -237,10 +246,18 @@ class TestConfigured:
 class FakeDocument:
     """Stand-in for an ``upstash_search`` document."""
 
-    def __init__(self, text: str, fetched_at: str | None) -> None:
+    def __init__(
+        self,
+        text: str,
+        fetched_at: str | None,
+        *,
+        parts: int | None = None,
+    ) -> None:
         self.id = "vacancy/38185674"
         self.content = {"text": text} if text else {}
         self.metadata = {"fetched_at": fetched_at} if fetched_at else None
+        if parts is not None:
+            self.metadata = {**(self.metadata or {}), "parts": parts}
 
 
 class TestReadPage:
@@ -317,6 +334,7 @@ class TestReadPage:
             search_index.read_page(doc_type="vacancy", doc_id=38185674)
         assert "db cache hit" in caplog.text
         assert "vacancy/38185674" in caplog.text
+        assert f"chars={len(MD)}" in caplog.text
 
     def test_miss_is_logged(self, monkeypatch, caplog):
         self._wire(monkeypatch, [None])
@@ -345,6 +363,187 @@ class TestSearchTtl:
         with caplog.at_level("WARNING", logger="hh_mcp.search_index"):
             assert search_index.search_ttl_s() == search_index.DEFAULT_TTL_S
         assert "not a number" in caplog.text
+
+
+RUSSIAN_PAGE = (
+    "# Вакансия\n\n"
+    + ("Требуется опыт разработки на 1С и знание SQL. " * 150)
+    + "\n\n# О компании\n\n"
+    + ("Мы делаем продукты для клиентов. " * 200)
+)
+"""A page whose bytes outnumber its characters, like every real vacancy."""
+
+
+class TestSplitForStorage:
+    """Upstash refuses content over 4 KiB, so a page is split, not truncated."""
+
+    def test_short_page_is_one_part(self):
+        assert search_index.split_for_storage("короткая страница") == ["короткая страница"]
+
+    def test_empty_page_is_one_empty_part(self):
+        assert search_index.split_for_storage("") == [""]
+
+    def test_page_over_the_limit_is_split(self):
+        parts = search_index.split_for_storage(RUSSIAN_PAGE)
+        assert len(parts) > 1
+
+    def test_every_part_fits_the_limit(self):
+        """The whole point: no part may be refused by Upstash."""
+        for part in search_index.split_for_storage(RUSSIAN_PAGE):
+            assert len(part.encode()) <= search_index.MAX_DOC_BYTES
+
+    def test_parts_reassemble_the_page(self):
+        parts = search_index.split_for_storage(RUSSIAN_PAGE)
+        assert "".join(parts) == RUSSIAN_PAGE
+
+    def test_limit_is_counted_in_bytes_not_characters(self):
+        """A 3 000-character Russian text is 6 000 bytes and must be split."""
+        page = "я" * 3_000
+        assert len(page) < search_index.MAX_DOC_BYTES
+        assert len(page.encode()) > search_index.MAX_DOC_BYTES
+        assert len(search_index.split_for_storage(page)) > 1
+
+    def test_parts_are_cut_on_a_paragraph_break_when_possible(self):
+        page = "первый абзац.\n\n" * 300
+        assert search_index.split_for_storage(page)[0].endswith("\n\n")
+
+    def test_custom_limit_is_honoured(self):
+        assert all(
+            len(part.encode()) <= 100
+            for part in search_index.split_for_storage(RUSSIAN_PAGE, max_bytes=100)
+        )
+
+    def test_a_character_wider_than_the_limit_does_not_hang(self):
+        """One character over budget: Upstash's error, not an infinite loop."""
+        parts = search_index.split_for_storage("界" * 3, max_bytes=1)
+        assert "".join(parts) == "界界界"
+
+
+class TestChunkId:
+    """Part 1 keeps the page id; further parts are suffixed."""
+
+    def test_first_part_is_the_page_id(self):
+        assert search_index.chunk_id("vacancy/38185674", 1) == "vacancy/38185674"
+
+    def test_further_parts_are_suffixed(self):
+        assert search_index.chunk_id("vacancy/38185674", 2) == "vacancy/38185674~2"
+
+    def test_part_one_for_any_number(self):
+        assert search_index.chunk_id("employer/1", 0) == "employer/1"
+
+
+class TestSplitPagesAreIndexed:
+    """A long page reaches the index as several documents."""
+
+    def test_parts_are_written_with_their_ids(self, wired: FakeIndex):
+        index_hh_page(doc_type="vacancy", doc_id=138156968, md=RUSSIAN_PAGE)
+        ids = [document["id"] for document in wired.upserted]
+        assert ids[0] == "vacancy/138156968"
+        assert len(ids) == len(search_index.split_for_storage(RUSSIAN_PAGE))
+        assert ids[1] == "vacancy/138156968~2"
+
+    def test_every_written_part_fits_the_limit(self, wired: FakeIndex):
+        index_hh_page(doc_type="vacancy", doc_id=138156968, md=RUSSIAN_PAGE)
+        for document in wired.upserted:
+            assert len(document["content"]["text"].encode()) <= search_index.MAX_DOC_BYTES
+
+    def test_parts_carry_their_numbers(self, wired: FakeIndex):
+        index_hh_page(doc_type="vacancy", doc_id=138156968, md=RUSSIAN_PAGE)
+        metadata = [document["metadata"] for document in wired.upserted]
+        assert metadata[0]["part"] == 1
+        assert metadata[0]["parts"] == len(wired.upserted)
+        assert metadata[1]["part"] == 2
+
+    def test_every_part_shares_one_fetched_at(self, wired: FakeIndex):
+        index_hh_page(doc_type="vacancy", doc_id=138156968, md=RUSSIAN_PAGE)
+        stamps = {document["metadata"]["fetched_at"] for document in wired.upserted}
+        assert len(stamps) == 1
+
+    def test_short_page_keeps_the_minimal_metadata(self, wired: FakeIndex):
+        """One part means the documented shape: fetched_at and nothing else."""
+        index_hh_page(doc_type="vacancy", doc_id=38185674, md=MD)
+        assert len(wired.upserted) == 1
+        assert set(wired.upserted[0]["metadata"]) == {"fetched_at"}
+
+    def test_the_split_is_logged(self, wired: FakeIndex, caplog):
+        with caplog.at_level("INFO", logger="hh_mcp.search_index"):
+            index_hh_page(doc_type="vacancy", doc_id=138156968, md=RUSSIAN_PAGE)
+        assert "parts=" in caplog.text
+        assert "vacancy/138156968" in caplog.text
+
+    def test_all_parts_are_written_in_one_upsert(self, wired: FakeIndex):
+        """A partial write would leave the index inconsistent."""
+        index_hh_page(doc_type="vacancy", doc_id=138156968, md=RUSSIAN_PAGE)
+        assert wired.upserts == 1
+
+    def test_a_failing_write_is_still_remembered(self, wired: FakeIndex):
+        def boom(**_kwargs):
+            raise RuntimeError("content too long")
+
+        wired.upsert = boom
+        index_hh_page(doc_type="vacancy", doc_id=138156968, md=RUSSIAN_PAGE)
+        assert "content too long" in search_index.last_error()
+
+
+class TestSplitPagesAreNotCached:
+    """A cache answer must be the whole page, not its first 4 KiB."""
+
+    def test_split_page_is_not_served_from_the_cache(self, monkeypatch):
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "https://example.invalid")
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", "token")
+
+        class Doc:
+            def fetch(self, *, ids):
+                return [
+                    FakeDocument(
+                        search_index.split_for_storage(RUSSIAN_PAGE)[0],
+                        _ago(5),
+                        parts=len(search_index.split_for_storage(RUSSIAN_PAGE)),
+                    )
+                ]
+
+        class Client:
+            def index(self, _name):
+                return Doc()
+
+        monkeypatch.setattr(search_index, "_build_client", lambda: Client())
+        assert (
+            search_index.read_page(doc_type="vacancy", doc_id=138156968, max_age_s=3600)
+            is None
+        )
+
+    def test_the_refusal_is_logged(self, monkeypatch, caplog):
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "https://example.invalid")
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", "token")
+
+        class Doc:
+            def fetch(self, *, ids):
+                return [FakeDocument(MD, _ago(5), parts=3)]
+
+        class Client:
+            def index(self, _name):
+                return Doc()
+
+        monkeypatch.setattr(search_index, "_build_client", lambda: Client())
+        with caplog.at_level("INFO", logger="hh_mcp.search_index"):
+            search_index.read_page(doc_type="vacancy", doc_id=1, max_age_s=3600)
+        assert "split into 3 parts" in caplog.text
+
+    def test_unreadable_parts_value_does_not_break_the_read(self, monkeypatch):
+        """Metadata can be written by anything; a tool call must not raise."""
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "https://example.invalid")
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", "token")
+
+        class Doc:
+            def fetch(self, *, ids):
+                return [FakeDocument(MD, _ago(5), parts="много")]
+
+        class Client:
+            def index(self, _name):
+                return Doc()
+
+        monkeypatch.setattr(search_index, "_build_client", lambda: Client())
+        assert search_index.read_page(doc_type="vacancy", doc_id=1, max_age_s=3600) == MD
 
 
 class TestNormalizeUrl:

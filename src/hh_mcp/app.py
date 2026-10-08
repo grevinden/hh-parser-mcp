@@ -179,7 +179,7 @@ def _fetch_markdown(url: str, *, doc_type: str | None = None, doc_id: int | None
     except (SSRError, InvalidURLError, FetchError) as exc:
         raise _tool_error(exc) from None
 
-    logger.info("page fetched from hh.ru: url=%s bytes=%d", url, len(md))
+    logger.info("page fetched from hh.ru: url=%s chars=%d", url, len(md))
 
     if len(_markdown_body(md)) < MIN_CONTENT_CHARS:
         raise ToolError(
