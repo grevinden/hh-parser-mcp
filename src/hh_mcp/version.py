@@ -105,21 +105,24 @@ def runtime_info() -> dict[str, Any]:
     Returns
     -------
     dict[str, Any]
-        Keys ``version``, ``commit``, ``build``, ``python``, ``fastmcp`` and
-        ``search``. ``version`` is the package version and ``build`` is
-        :data:`BUILD_ID`; they differ only inside a git checkout.
-        ``search`` is ``"configured"`` or ``"missing"`` — indexing fails
-        silently, so its state belongs in the build report.
+        Keys ``version``, ``commit``, ``build``, ``python``, ``fastmcp``,
+        ``search`` and ``search_error``. ``version`` is the package version
+        and ``build`` is :data:`BUILD_ID`; they differ only inside a git
+        checkout. ``search`` is one of ``missing``, ``unavailable``, ``error``
+        or ``ready`` — see :func:`hh_mcp.search_index.status` — and
+        ``search_error`` carries the reason, or the last write failure.
     """
-    from hh_mcp.search_index import configured
+    from hh_mcp.search_index import last_error, status
 
+    search = status()
     return {
         "version": package_version(),
         "commit": short_commit(),
         "build": BUILD_ID,
         "python": ".".join(str(part) for part in sys.version_info[:3]),
         "fastmcp": _distribution_version("fastmcp"),
-        "search": "configured" if configured() else "missing",
+        "search": search["state"],
+        "search_error": search["error"] or last_error(),
     }
 
 

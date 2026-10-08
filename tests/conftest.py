@@ -19,6 +19,18 @@ from typing import Any
 import pytest
 
 import hh_mcp.app as app_module
+from hh_mcp import search_index
+
+
+@pytest.fixture(autouse=True)
+def _fresh_search_error() -> None:
+    """Start every test with no remembered indexing failure.
+
+    ``search_index`` keeps the last failure in module state on purpose, so that
+    ``version()`` can report a write that failed after a healthy probe. Without
+    this, one test's failure would leak into the next one's report.
+    """
+    search_index._LAST_ERROR = None
 
 
 @pytest.fixture(autouse=True)

@@ -100,17 +100,32 @@ class TestRuntimeInfo:
             "python",
             "fastmcp",
             "search",
+            "search_error",
         }
-        assert all(isinstance(v, str) for v in info.values())
+        assert all(isinstance(v, str | None) for v in info.values())
 
     def test_reports_search_backend_state(self, monkeypatch):
-        """Indexing is silent when unconfigured, so the build report names it."""
+        """Indexing fails silently, so the build report names its state."""
+        from hh_mcp import search_index
+
         monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "https://example.invalid")
         monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", "token")
-        assert runtime_info()["search"] == "configured"
 
-        monkeypatch.delenv("UPSTASH_SEARCH_REST_TOKEN")
-        assert runtime_info()["search"] == "missing"
+        class Fake:
+            def list_indexes(self):
+                return ["hh_mcp"]
+
+        monkeypatch.setattr(search_index, "_build_client", Fake)
+        report = runtime_info()
+        assert report["search"] == "ready"
+        assert report["search_error"] is None
+
+    def test_reports_missing_search_backend(self, monkeypatch):
+        for name in ("UPSTASH_SEARCH_REST_URL", "UPSTASH_SEARCH_REST_TOKEN"):
+            monkeypatch.delenv(name, raising=False)
+        report = runtime_info()
+        assert report["search"] == "missing"
+        assert report["search_error"] is None
 
     def test_build_agrees_with_fields(self):
         info = runtime_info()

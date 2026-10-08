@@ -33,8 +33,9 @@ class FakeIndex:
 class FakeClient:
     """Stand-in for ``upstash_search.Search``."""
 
-    def __init__(self, index: FakeIndex) -> None:
+    def __init__(self, index: FakeIndex, indexes: list[str] | None = None) -> None:
         self._index = index
+        self._indexes = ["hh_mcp"] if indexes is None else indexes
         self.requested: list[str] = []
 
     def index(self, name: str) -> FakeIndex:
@@ -43,19 +44,27 @@ class FakeClient:
         self._index.name = name
         return self._index
 
+    def list_indexes(self) -> list[str]:
+        return list(self._indexes)
+
 
 @pytest.fixture
 def fake_index() -> FakeIndex:
     return FakeIndex("hh_mcp")
 
 
-@pytest.fixture
-def wired(monkeypatch: pytest.MonkeyPatch, fake_index: FakeIndex) -> FakeIndex:
-    """Point the module at a fake client with credentials present."""
-    client = FakeClient(fake_index)
+def _wire(monkeypatch: pytest.MonkeyPatch, client) -> None:
+    """Point the module at *client* with credentials present."""
     monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "https://example.invalid")
     monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", "token-not-real")
+    monkeypatch.setattr(search_index, "_build_client", lambda: client)
     monkeypatch.setattr(search_index, "_client", lambda: client)
+
+
+@pytest.fixture
+def wired(monkeypatch: pytest.MonkeyPatch, fake_index: FakeIndex) -> FakeIndex:
+    """A fake client whose index records every upsert."""
+    _wire(monkeypatch, FakeClient(fake_index))
     return fake_index
 
 
@@ -128,6 +137,67 @@ class TestDocumentShape:
         index_hh_page(doc_type="vacancy", doc_id=38185674, md=MD + " Обновлено.")
         ids = [d["id"] for d in wired.upserted]
         assert ids == ["vacancy/38185674", "vacancy/38185674"]
+
+
+class TestStatus:
+    """``status()`` turns a silent failure into a readable state."""
+
+    def test_missing_credentials(self, monkeypatch):
+        monkeypatch.delenv("UPSTASH_SEARCH_REST_URL", raising=False)
+        monkeypatch.delenv("UPSTASH_SEARCH_REST_TOKEN", raising=False)
+        assert search_index.status() == {"state": "missing", "error": None}
+
+    def test_ready_when_endpoint_answers(self, monkeypatch, fake_index):
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "https://example.invalid")
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", "token")
+        monkeypatch.setattr(search_index, "_build_client", lambda: FakeClient(fake_index))
+        assert search_index.status() == {"state": "ready", "error": None}
+
+    def test_error_when_endpoint_refuses(self, monkeypatch, fake_index):
+        class Refusing(FakeClient):
+            def list_indexes(self):
+                raise RuntimeError("401 unauthorized")
+
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "https://example.invalid")
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", "token")
+        monkeypatch.setattr(
+            search_index, "_build_client", lambda: Refusing(fake_index)
+        )
+        report = search_index.status()
+        assert report["state"] == "error"
+        assert "401 unauthorized" in report["error"]
+
+    def test_unavailable_when_client_cannot_be_built(self, monkeypatch):
+        def boom():
+            raise ImportError("no module named upstash_search")
+
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_URL", "https://example.invalid")
+        monkeypatch.setenv("UPSTASH_SEARCH_REST_TOKEN", "token")
+        monkeypatch.setattr(search_index, "_build_client", boom)
+        report = search_index.status()
+        assert report["state"] == "unavailable"
+        assert "ImportError" in report["error"]
+
+    def test_status_writes_nothing(self, wired: FakeIndex):
+        """The probe is a read: it must not create documents."""
+        search_index.status()
+        assert wired.upserted == []
+
+    def test_write_failure_is_remembered(self, wired: FakeIndex):
+        def boom(**_kwargs):
+            raise RuntimeError("502 bad gateway")
+
+        wired.upsert = boom
+        index_hh_page(doc_type="vacancy", doc_id=1, md=MD)  # no raise
+        assert "502 bad gateway" in search_index.last_error()
+
+    def test_client_failure_is_remembered(self, monkeypatch):
+        def boom():
+            raise RuntimeError("no credentials in this environment")
+
+        monkeypatch.setattr(search_index, "_build_client", boom)
+        assert search_index._client() is None
+        assert "no credentials" in search_index.last_error()
 
 
 class TestConfigured:
