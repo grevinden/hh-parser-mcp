@@ -6,11 +6,10 @@
 [![prefab‑ui](https://img.shields.io/badge/prefab--ui-0.20%2B-orange)](https://github.com/PrefectHQ/prefab-ui)
 
 **hh-mcp** — MCP-сервер (Model Context Protocol) для получения страниц с hh.ru
-в формате Markdown. Предоставляет два backend-инструмента
-([`get_vacancy`](src/hh_mcp/app.py:116), [`get_employer`](src/hh_mcp/app.py:141))
-для LLM-агентов и два UI-входных инструмента
-([`vacancy_app`](src/hh_mcp/app.py:168), [`employer_app`](src/hh_mcp/app.py:200))
-на базе Prefab (генеративный UI).
+в формате Markdown. Три инструмента — [`vacancy`](src/hh_mcp/app.py),
+[`company`](src/hh_mcp/app.py) и [`search`](src/hh_mcp/app.py) — работают
+одновременно для LLM-агентов (MCP) и для браузера (Apps UI): отдельные
+UI-входные инструменты не нужны.
 
 Запуск — нативный пускатель fastmcp из корня (`uv run fastmcp run` —
 MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузерный UI-превью).
@@ -21,9 +20,10 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
 
 ## Возможности
 
-- **6 инструментов MCP** — 3 model-видимых (`get_vacancy`, `get_employer`,
-  `search_vacancies`) и 3 UI-entry (`vacancy_app`, `employer_app`, `search_app`)
-  на FastMCPApp. `search_app` показывает результат поиска в панели.
+- **3 инструмента MCP** — `vacancy`, `company`, `search`. Каждый виден и модели
+  (`visibility: ["app", "model"]`), и веб-пикеру Apps: meta несёт плейсхолдер
+  Prefab-рендерера, fastmcp синтезирует ресурс `ui://prefab/tool/<hash>/renderer.html`,
+  а форма ввода генерируется из JSON-схемы инструмента.
 - **Fetch-пайплайн SOLID/DIP** — SSRF-защита, HTTP/2-транспорт (httpx2),
   HTML-санитайзер с NoisePolicy, разрешение ссылок, конвертация в Markdown
   (markitdown). Иерархия исключений — [`errors.py`](src/hh_mcp/fetch/errors.py).
@@ -31,10 +31,10 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
   fastmcp dev apps fastmcp.json`) из корня репозитория; транспорты stdio/http/sse.
 - **Dev UI** — браузерное превью UI-инструментов (`fastmcp dev apps`).
 - **Файловый кеш ответов** — `ResponseCachingMiddleware` + `FileTreeStore`
-  (без Redis) в [`server.py`](server.py): повторный вызов `get_vacancy` /
-  `get_employer` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
+  (без Redis) в [`server.py`](server.py): повторный вызов `vacancy` /
+  `company` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
   (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`).
-- **347 тестов** — `uv run pytest tests/ -v` (app, fetch-модуль, guards, html,
+- **343 тестов** — `uv run pytest tests/ -v` (app, fetch-модуль, guards, html,
   links, converter, orchestrator, transport, config, errors, enrich, caching).
 
 ---
@@ -148,9 +148,10 @@ Dev-режим — отдельная подкоманда `fastmcp dev apps fas
 
 Dev-режим — нативный (`uv run fastmcp dev apps fastmcp.json`): MCP-сервер
 на порту 8000 (`/mcp`) + браузерный UI превью на порту 8080 (токен-URL,
-открывается автоматически). Это интерфейс **для отладки** UI-инструментов
-(`vacancy_app` / `employer_app`); в нём же видна панель операций сервера
-(все вызовы `tools/call` с аргументами и JSON-ответами).
+открывается автоматически). Это интерфейс **для отладки** инструментов: пикер
+показывает все три (`vacancy`, `company`, `search`) и строит форму ввода из их
+JSON-схем; в нём же видна панель операций сервера (все вызовы `tools/call` с
+аргументами и JSON-ответами).
 
 Прежний собственный dev-UI (`src/hh_mcp/devapp.py`, Starlette, страница
 `GET /` и REST `/api/*`) **удалён** — см. коммит `a30bcb9`.
@@ -169,11 +170,11 @@ MCP-клиента — клиентские команды fastmcp (`fastmcp lis
 # Список инструментов
 uv run fastmcp list http://127.0.0.1:8000/mcp
 
-# Вызов get_vacancy (типы коэрсятся по схеме автоматически)
-uv run fastmcp call http://127.0.0.1:8000/mcp get_vacancy id=138156968
+# Вызов vacancy (типы коэрсятся по схеме автоматически)
+uv run fastmcp call http://127.0.0.1:8000/mcp vacancy id=138156968
 
-# Вызов get_employer, JSON-вывод (content + structuredContent)
-uv run fastmcp call http://127.0.0.1:8000/mcp get_employer id=11620617 --json
+# Вызов company, JSON-вывод (content + structuredContent)
+uv run fastmcp call http://127.0.0.1:8000/mcp company id=11620617 --json
 ```
 
 Более низкоуровневый вариант — прямой JSON-RPC запрос к `/mcp`
@@ -186,14 +187,15 @@ uv run fastmcp call http://127.0.0.1:8000/mcp get_employer id=11620617 --json
 
 ## Инструменты MCP
 
-| Имя | Видимость | Параметры | Описание |
-|-----|-----------|-----------|----------|
-| `get_vacancy` | model (`@app.tool(model=True)`) | `id: int` (строго положительный) | HTML вакансии hh.ru → Markdown. Timeout 30 с, макс. 120 000 символов |
-| `get_employer` | model (`@app.tool(model=True)`) | `id: int` (строго положительный) | HTML страницы работодателя hh.ru → Markdown |
-| `search_vacancies` | model (`@app.tool(model=True)`) | `text: str`, `page: int = 0` | Поиск вакансий на hh.ru → плоский список ID (`list[int]`). Пагинация: `page`; за пределами выдачи — пустой список |
-| `vacancy_app` | UI (`@app.ui()`) | — (запрашивает ID через Prefab Input) | UI-компонент: Column с полем ID и кнопкой CallTool |
-| `employer_app` | UI (`@app.ui()`) | — | Аналогично для работодателя |
-| `search_app` | UI (`@app.ui()`) | — (запрашивает запрос и страницу) | Панель поиска: поля запроса/страницы, кнопка и блок с найденными ID |
+Все три инструмента зарегистрированы одинаково: `visibility: ["app", "model"]` +
+`resourceUri` Prefab-рендерера. Поэтому один и тот же инструмент доступен и
+модели по MCP, и в браузерном пикере Apps (форма генерируется из схемы).
+
+| Имя | Параметры | Описание |
+|-----|-----------|----------|
+| `vacancy` | `id: int` (строго положительный) | HTML вакансии hh.ru → Markdown. Timeout 30 с, макс. 120 000 символов |
+| `company` | `id: int` (строго положительный) | HTML страницы работодателя (компании) hh.ru → Markdown |
+| `search` | `text: str`, `page: int = 0` | Поиск вакансий на hh.ru → плоский список ID (`list[int]`). Пагинация: `page`; за пределами выдачи — пустой список |
 
 **Валидация**: `id <= 0` → `ToolError("Invalid ID: …")` до HTTP-запроса.
 **Ошибки fetch** маппятся в `ToolError` (см. `_tool_error()` в
@@ -213,7 +215,7 @@ http://127.0.0.1:8000/mcp
 Поддерживается любым MCP-клиентом, реализующим спецификацию streamable HTTP
 (protocol version `2026-07-28`).
 
-> Второй вызов `get_vacancy` с тем же id возвращается из файлового кеша
+> Второй вызов `vacancy` с тем же id возвращается из файлового кеша
 > (см. [Кеширование ответов](#кеширование-ответов)).
 
 ---
@@ -225,10 +227,11 @@ http://127.0.0.1:8000/mcp
 `ResponseCachingMiddleware` с файловым хранилищем `FileTreeStore`
 (`py-key-value-aio`, уже установлен через `fastmcp[apps]` — Redis не нужен):
 
-- **Кешируются** только успешные ответы `get_vacancy` / `get_employer`
+- **Кешируются** только успешные ответы `vacancy` / `company` (`search`
+  исключён: выдача меняется от страницы к странице)
   (`CACHED_TOOLS` в `server.py`); ошибки и остальные инструменты не кешируются.
 - **Ключ кеша** — `авторизация : версия : имя инструмента : аргументы`:
-  вызов `get_vacancy {"id": 138156968}` всегда даёт один и тот же ключ.
+  вызов `vacancy {"id": 138156968}` всегда даёт один и тот же ключ.
 - **TTL** — 1 час (`CACHE_TTL_S`); по истечении следующий вызов снова
   уходит на hh.ru.
 - **Каталог кеша** — `~/.cache/hh-mcp` по умолчанию; переопределяется
@@ -249,7 +252,7 @@ HH_MCP_CACHE_DIR=/var/cache/hh-mcp uv run fastmcp run
 uv run pytest tests/ -v
 ```
 
-**347 тестов**, все passed. Покрытие:
+**343 тестов**, все passed. Покрытие:
 - `test_mcp_app.py` — инструменты, валидация, error mapping, UI-entry;
 - `test_caching.py` — файловый кеш: повторный id не дёргает fetch;
 - `test_enrich.py` — обогащение employer-карточки;
@@ -298,7 +301,7 @@ uv run pytest tests/ -v
 ```
 MCP Client / LLM → FastMCP (streamable HTTP / stdio) → FastMCPApp
      ↓
-Tool fn (get_vacancy / get_employer)
+Tool fn (vacancy / company)
      ↓
 fetch_as_markdown(url, timeout=30, max_chars=120_000)
      ↓

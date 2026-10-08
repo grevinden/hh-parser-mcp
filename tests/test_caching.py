@@ -25,7 +25,7 @@ from key_value.aio.stores.filetree import (
 import hh_mcp.app as app_module
 from hh_mcp.app import app
 
-CACHED_TOOLS: list[str] = ["get_vacancy", "get_employer"]
+CACHED_TOOLS: list[str] = ["vacancy", "company"]
 """Same tool allowlist as ``server.CACHED_TOOLS``."""
 
 
@@ -81,9 +81,9 @@ class TestResponseCaching:
         monkeypatch.setattr(app_module, "fetch_as_markdown", _counting_fetch(calls))
         server = _build_server(tmp_path / "cache")
 
-        first = _call_tool(server, "get_vacancy", {"id": 138156968})
-        second = _call_tool(server, "get_vacancy", {"id": 138156968})
-        other = _call_tool(server, "get_vacancy", {"id": 137911901})
+        first = _call_tool(server, "vacancy", {"id": 138156968})
+        second = _call_tool(server, "vacancy", {"id": 138156968})
+        other = _call_tool(server, "vacancy", {"id": 137911901})
 
         assert first.is_error is False
         assert second.is_error is False
@@ -95,13 +95,13 @@ class TestResponseCaching:
         ]
         assert first.content[0].text == second.content[0].text
 
-    def test_repeat_employer_id_served_from_cache(self, tmp_path, monkeypatch):
+    def test_repeat_company_id_served_from_cache(self, tmp_path, monkeypatch):
         calls: list[str] = []
         monkeypatch.setattr(app_module, "fetch_as_markdown", _counting_fetch(calls))
         server = _build_server(tmp_path / "cache")
 
-        first = _call_tool(server, "get_employer", {"id": 9410116})
-        second = _call_tool(server, "get_employer", {"id": 9410116})
+        first = _call_tool(server, "company", {"id": 9410116})
+        second = _call_tool(server, "company", {"id": 9410116})
 
         assert first.is_error is False
         assert second.is_error is False
@@ -109,16 +109,14 @@ class TestResponseCaching:
         assert first.content[0].text == second.content[0].text
 
     def test_tool_outside_allowlist_not_cached(self, tmp_path, monkeypatch):
-        # get_employer is NOT on this server's cached-tools allowlist —
+        # company is NOT on this server's cached-tools allowlist —
         # repeating it must call fetch every time.
         calls: list[str] = []
         monkeypatch.setattr(app_module, "fetch_as_markdown", _counting_fetch(calls))
-        server = _build_server(
-            tmp_path / "cache", included_tools=["get_vacancy"]
-        )
+        server = _build_server(tmp_path / "cache", included_tools=["vacancy"])
 
-        first = _call_tool(server, "get_employer", {"id": 9410116})
-        second = _call_tool(server, "get_employer", {"id": 9410116})
+        first = _call_tool(server, "company", {"id": 9410116})
+        second = _call_tool(server, "company", {"id": 9410116})
 
         assert first.is_error is False
         assert second.is_error is False
@@ -134,10 +132,10 @@ class TestResponseCaching:
         monkeypatch.setattr(app_module, "fetch_as_markdown", _counting_fetch(calls))
 
         server1 = _build_server(tmp_path / "cache")
-        first = _call_tool(server1, "get_vacancy", {"id": 138156968})
+        first = _call_tool(server1, "vacancy", {"id": 138156968})
 
         server2 = _build_server(tmp_path / "cache")
-        second = _call_tool(server2, "get_vacancy", {"id": 138156968})
+        second = _call_tool(server2, "vacancy", {"id": 138156968})
 
         assert calls == ["https://hh.ru/vacancy/138156968"]
         assert first.content[0].text == second.content[0].text

@@ -45,8 +45,11 @@ CACHE_DIR: Path = Path(
 CACHE_TTL_S: int = 3600
 """TTL for cached tool responses (1 hour; failed calls are never cached)."""
 
-CACHED_TOOLS: tuple[str, ...] = ("get_vacancy", "get_employer")
-"""Backend tools whose successful responses are cached (hh.ru calls)."""
+CACHED_TOOLS: tuple[str, ...] = ("vacancy", "company")
+"""Tools whose successful responses are cached (hh.ru page fetches).
+
+``search`` is deliberately absent — its results change between pages.
+"""
 
 # Sanitization strategies need the directory to already exist.
 CACHE_DIR.mkdir(parents=True, exist_ok=True)

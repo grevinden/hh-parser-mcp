@@ -8,24 +8,15 @@ by ``tests/test_orchestrator.py``.
 from __future__ import annotations
 
 import asyncio
-import json
 
 import pytest
 from fastmcp.exceptions import ToolError
 from fastmcp import FastMCP
 from fastmcp.client import Client
 from fastmcp.client.transports.memory import FastMCPTransport
-from prefab_ui.components import Button, Column
 
 import hh_mcp.app as app_module
-from hh_mcp.app import (
-    RESULT_KEY,
-    employer_app,
-    get_employer,
-    get_vacancy,
-    search_app,
-    vacancy_app,
-)
+from hh_mcp.app import company, vacancy
 from hh_mcp.fetch.errors import (
     ConversionError,
     FetchTimeoutError,
@@ -126,20 +117,20 @@ class TestToolErrorMapping:
 class TestToolValidation:
     """ID validation happens before any fetch call."""
 
-    def test_get_vacancy_rejects_zero(self, monkeypatch):
+    def test_vacancy_rejects_zero(self, monkeypatch):
         monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch())
         with pytest.raises(ToolError, match="Invalid ID: 0"):
-            get_vacancy(0)
+            vacancy(0)
 
-    def test_get_vacancy_rejects_negative(self, monkeypatch):
+    def test_vacancy_rejects_negative(self, monkeypatch):
         monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch())
         with pytest.raises(ToolError, match="Invalid ID: -1"):
-            get_vacancy(-1)
+            vacancy(-1)
 
-    def test_get_employer_rejects_zero(self, monkeypatch):
+    def test_company_rejects_zero(self, monkeypatch):
         monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch())
         with pytest.raises(ToolError, match="Invalid ID: 0"):
-            get_employer(0)
+            company(0)
 
     def test_ok_calls_fetch_with_url(self, monkeypatch):
         seen: dict[str, str] = {}
@@ -149,10 +140,10 @@ class TestToolValidation:
             return "markdown"
 
         monkeypatch.setattr(app_module, "fetch_as_markdown", fake)
-        assert get_vacancy(38185674) == "markdown"
+        assert vacancy(38185674) == "markdown"
         assert seen["url"] == "https://hh.ru/vacancy/38185674"
 
-        assert get_employer(9410116) == "markdown"
+        assert company(9410116) == "markdown"
         assert seen["url"] == "https://hh.ru/employer/9410116"
 
 
@@ -169,20 +160,13 @@ class TestMcpTools:
             async with Client(FastMCPTransport(server)) as client:
                 return {t.name for t in await client.list_tools()}
 
-        assert asyncio.run(_run()) == {
-            "get_vacancy",
-            "get_employer",
-            "vacancy_app",
-            "employer_app",
-            "search_vacancies",
-            "search_app",
-        }
+        assert asyncio.run(_run()) == {"vacancy", "company", "search"}
 
     @pytest.mark.parametrize(
         ("tool", "id_", "url_frag"),
         [
-            ("get_vacancy", 38185674, "vacancy/38185674"),
-            ("get_employer", 9410116, "employer/9410116"),
+            ("vacancy", 38185674, "vacancy/38185674"),
+            ("company", 9410116, "employer/9410116"),
         ],
     )
     def test_success(self, monkeypatch, tool, id_, url_frag):
@@ -193,19 +177,19 @@ class TestMcpTools:
 
     def test_invalid_id_zero(self, monkeypatch):
         monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch())
-        result = _call("get_vacancy", {"id": 0}, app=app_module.app)
+        result = _call("vacancy", {"id": 0}, app=app_module.app)
         assert result.is_error is True
         assert "Invalid ID: 0" in result.content[0].text
 
     def test_invalid_id_negative(self, monkeypatch):
         monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch())
-        result = _call("get_employer", {"id": -1}, app=app_module.app)
+        result = _call("company", {"id": -1}, app=app_module.app)
         assert result.is_error is True
         assert "Invalid ID: -1" in result.content[0].text
 
     def test_ssre(self, monkeypatch):
         monkeypatch.setattr(app_module, "fetch_as_markdown", _raising_fetch(SSRError()))
-        result = _call("get_vacancy", {"id": 123}, app=app_module.app)
+        result = _call("vacancy", {"id": 123}, app=app_module.app)
         assert result.is_error is True
         assert "SSRF guard rejected the URL" in result.content[0].text
 
@@ -215,7 +199,7 @@ class TestMcpTools:
             "fetch_as_markdown",
             _raising_fetch(FetchTimeoutError("timed out")),
         )
-        result = _call("get_vacancy", {"id": 123}, app=app_module.app)
+        result = _call("vacancy", {"id": 123}, app=app_module.app)
         assert result.is_error is True
         assert "Timeout after 30s" in result.content[0].text
 
@@ -225,7 +209,7 @@ class TestMcpTools:
             "fetch_as_markdown",
             _raising_fetch(TransportError("connection refused")),
         )
-        result = _call("get_vacancy", {"id": 123}, app=app_module.app)
+        result = _call("vacancy", {"id": 123}, app=app_module.app)
         assert result.is_error is True
         assert "Transport error: connection refused" in result.content[0].text
 
@@ -235,107 +219,62 @@ class TestMcpTools:
             "fetch_as_markdown",
             _raising_fetch(ResponseTooLargeError("5 MiB > 4 MiB cap")),
         )
-        result = _call("get_vacancy", {"id": 123}, app=app_module.app)
+        result = _call("vacancy", {"id": 123}, app=app_module.app)
         assert result.is_error is True
         assert "Response too large > 120000" in result.content[0].text
 
     def test_missing_id_rejected(self):
-        result = _call("get_vacancy", {}, app=app_module.app)
+        result = _call("vacancy", {}, app=app_module.app)
         assert result.is_error is True
 
 
-# --- UI entry-points ----------------------------------------------------------
+# --- Dual registration: one tool for model + browser ---------------------------
 
 
-class TestUiEntryPoints:
-    """@app.ui() tools: registration, visibility, and component output."""
+class TestDualRegistration:
+    """Each tool serves the model AND the browser Apps picker at once."""
 
-    def test_ui_returns_column(self):
-        col = vacancy_app()
-        assert isinstance(col, Column)
-
-    def test_ui_button_wired_to_backend_tool(self):
-        col = vacancy_app()
-        button = next(c for c in col.children if isinstance(c, Button))
-        action = button.on_click
-        assert action is not None
-        assert getattr(action, "tool", None) == "get_vacancy"
-        assert action.arguments == {"id": "{{ vacancy_id }}"}
-
-        col = employer_app()
-        button = next(c for c in col.children if isinstance(c, Button))
-        action = button.on_click
-        assert action is not None
-        assert getattr(action, "tool", None) == "get_employer"
-        assert action.arguments == {"id": "{{ employer_id }}"}
-
-    def test_ui_serialization_roundtrip(self):
-        # Plan §6.4: the component tree must be serializable to JSON.
-        json_dict = vacancy_app().to_json()
-        assert json_dict["type"] == "Column"
-        assert json_dict["children"]
-
-    def test_search_app_button_wired_to_search_tool(self):
-        col = search_app()
-        button = next(c for c in col.children if isinstance(c, Button))
-        actions = button.on_click
-        # on_click is a list: reset state, then the CallTool.
-        assert isinstance(actions, list) and len(actions) == 2
-        call = actions[1]
-        assert getattr(call, "tool", None) == "search_vacancies"
-        assert call.arguments == {"text": "{{ search_text }}", "page": "{{ search_page }}"}
-
-    def test_search_app_renders_result_block(self):
-        """Result is captured into client state and rendered, not only toasted."""
-        d = search_app().to_json()
-        serialized = json.dumps(d, ensure_ascii=False)
-        # CallTool success handler stores the tool result under RESULT_KEY
-        assert f'"key": "{RESULT_KEY}", "value": "{{{{ $result }}}}"' in serialized
-        # A conditional block renders that state back to the user
-        assert f'"content": "{{{{ {RESULT_KEY} }}}}"' in serialized
-
-    def test_ui_registered_as_tool(self):
+    def _tools(self):
         async def _run():
             server = FastMCP("hh-mcp-test")
             server.add_provider(app_module.app)
             async with Client(FastMCPTransport(server)) as client:
-                tools = {t.name: t for t in await client.list_tools()}
-                return tools["vacancy_app"], tools["employer_app"]
+                return await client.list_tools()
 
-        vacancy_tool, employer_tool = asyncio.run(_run())
-        # Entry-point tools carry the Prefab renderer resource on the wire.
-        assert "resourceUri" in vacancy_tool.meta["ui"]
-        assert vacancy_tool.meta["ui"]["visibility"] == ["model"]
-        assert "resourceUri" in employer_tool.meta["ui"]
+        return {t.name: t for t in asyncio.run(_run())}
 
-    def test_ui_returns_structured_content(self, monkeypatch):
-        """Model calls vacancy_app() → structured_content with UI metadata (§3.4)."""
-        result = _call("vacancy_app", {}, app=app_module.app)
-        assert result.is_error is False
-        assert result.structured_content is not None
-        assert "view" in result.structured_content
+    def test_all_three_tools_registered(self):
+        assert set(self._tools()) == {"vacancy", "company", "search"}
 
+    def test_visible_to_model(self):
+        for name, tool in self._tools().items():
+            assert tool.meta["ui"]["visibility"] == ["app", "model"], name
 
-# --- Backend tool visibility ---------------------------------------------------
+    def test_reaches_browser_picker(self):
+        """The picker lists only tools carrying a Prefab resourceUri.
 
+        fastmcp rewrites the placeholder into a per-tool renderer URI at
+        list_tools time, so the browser UI needs no separate entry-point tool.
+        """
+        for name, tool in self._tools().items():
+            resource_uri = tool.meta["ui"]["resourceUri"]
+            assert resource_uri.startswith("ui://prefab/tool/"), name
+            assert resource_uri.endswith("/renderer.html"), name
 
-class TestVisibility:
-    """meta.ui.visibility semantics: model=True vs @app.ui()."""
-
-    def test_backend_tools_visible_to_model(self):
+    def test_renderer_resource_is_synthesized(self):
         async def _run():
-            return await app_module.app._list_tools()
+            server = FastMCP("hh-mcp-test")
+            server.add_provider(app_module.app)
+            async with Client(FastMCPTransport(server)) as client:
+                return [str(r.uri) for r in await client.list_resources()]
 
-        tools = {t.name: t for t in asyncio.run(_run())}
-        assert tools["get_vacancy"].meta["ui"]["visibility"] == ["app", "model"]
-        assert tools["get_employer"].meta["ui"]["visibility"] == ["app", "model"]
+        resources = asyncio.run(_run())
+        uris = {t.meta["ui"]["resourceUri"] for t in self._tools().values()}
+        assert uris.issubset(set(resources))
 
-    def test_ui_tools_model_only(self):
-        async def _run():
-            return await app_module.app._list_tools()
-
-        tools = {t.name: t for t in asyncio.run(_run())}
-        assert tools["vacancy_app"].meta["ui"]["visibility"] == ["model"]
-        assert tools["employer_app"].meta["ui"]["visibility"] == ["model"]
-
-
+    def test_input_schema_generated_for_browser_form(self):
+        """The picker builds the browser form from the tool's own schema."""
+        tools = self._tools()
+        assert set(tools["vacancy"].input_schema["properties"]) == {"id"}
+        assert set(tools["search"].input_schema["properties"]) == {"text", "page"}
+        assert tools["search"].input_schema["required"] == ["text"]

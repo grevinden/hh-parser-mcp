@@ -1,22 +1,26 @@
-"""hh-mcp FastMCPApp — hh.ru pages as MCP tools and in-browser UI apps.
+"""hh-mcp FastMCPApp — hh.ru pages as MCP tools.
 
-Implements the FastMCP Apps pattern (gofastmcp.com/apps/quickstart):
-backend tools (:func:`get_vacancy`, :func:`get_employer`) return fetched
-hh.ru pages as Markdown, while UI entry-points (:func:`vacancy_app`,
-:func:`employer_app`) render Prefab components whose button calls the
-backend tool from the in-browser app (:class:`CallTool`).
+Three tools (:func:`vacancy`, :func:`company`, :func:`search`) serve **both**
+audiences at once: they are visible to the model (``visibility: ["app",
+"model"]``) and appear in the browser Apps picker, which generates the input
+form from each tool's JSON schema. A tool gets into the picker by carrying the
+Prefab renderer placeholder in ``meta["ui"]["resourceUri"]``; fastmcp then
+synthesizes a per-tool renderer resource on the fly.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+from typing import Any
 from urllib.parse import quote_plus
 
 from fastmcp import FastMCPApp
 from fastmcp.exceptions import ToolError
-from prefab_ui.actions import SetState, ShowToast
-from prefab_ui.actions.mcp import CallTool
-from prefab_ui.components import RESULT, Button, Code, Column, Heading, If, Input, Text
+from fastmcp.server.providers.local_provider.decorators.tools import (
+    PREFAB_RENDERER_URI,
+)
+from fastmcp.tools.base import Tool
 
 from hh_mcp.fetch import (
     ConversionError,
@@ -34,12 +38,9 @@ from hh_mcp.search_index import index_hh_page
 
 __all__ = [
     "app",
-    "get_vacancy",
-    "get_employer",
-    "search_vacancies",
-    "vacancy_app",
-    "employer_app",
-    "search_app",
+    "vacancy",
+    "company",
+    "search",
 ]
 
 # --- Configuration ---------------------------------------------------------
@@ -54,8 +55,39 @@ MAX_CHARS: int = 120_000
 
 app: FastMCPApp = FastMCPApp("hh-mcp")
 
-RESULT_KEY: str = "search_result"
-"""Client-side state key holding the last :func:`search_vacancies` result."""
+
+# --- Dual registration (model + browser) -----------------------------------
+
+def register_tool(name: str, fn: Callable[..., Any]) -> None:
+    """Register *fn* as one tool usable by both the model and the web UI.
+
+    The tool keeps ``visibility: ["app", "model"]`` — an LLM can call it over
+    MCP, and the Apps picker lists it because its meta carries the Prefab
+    renderer placeholder. fastmcp rewrites that placeholder into a per-tool
+    ``ui://prefab/tool/<hash>/renderer.html`` resource at ``tools/list`` time,
+    synthesizing the renderer HTML on demand. The picker then builds the input
+    form from the tool's own JSON schema, so no separate UI entry-point tool is
+    needed.
+
+    Parameters
+    ----------
+    name:
+        Tool name as exposed over MCP (e.g. ``"vacancy"``).
+    fn:
+        The tool function; its signature and return annotation drive the
+        generated input/output schemas.
+    """
+    tool = Tool.from_function(
+        fn,
+        name=name,
+        meta={
+            "ui": {
+                "resourceUri": PREFAB_RENDERER_URI,
+                "visibility": ["app", "model"],
+            }
+        },
+    )
+    app.add_tool(tool)
 
 
 # --- Error mapping ---------------------------------------------------------
@@ -132,10 +164,9 @@ def _fetch_markdown(url: str, *, doc_type: str | None = None, doc_id: int | None
     return md
 
 
-# --- Backend tools ---------------------------------------------------------
+# --- Tools -----------------------------------------------------------------
 
-@app.tool(model=True)
-def get_vacancy(id: int) -> str:
+def vacancy(id: int) -> str:
     """Fetch an hh.ru vacancy page as Markdown.
 
     Parameters
@@ -161,8 +192,7 @@ def get_vacancy(id: int) -> str:
     )
 
 
-@app.tool(model=True)
-def get_employer(id: int) -> str:
+def company(id: int) -> str:
     """Fetch an hh.ru employer (company) page as Markdown.
 
     Parameters
@@ -191,8 +221,7 @@ def get_employer(id: int) -> str:
 VACANCY_ID_RE = re.compile(r'data-qa="serp-item__title"[^>]*href="[^"]*/vacancy/(\d+)', re.M)
 
 
-@app.tool(model=True)
-def search_vacancies(text: str, page: int = 0) -> list[int]:
+def search(text: str, page: int = 0) -> list[int]:
     """Search hh.ru vacancies and return a flat list of vacancy IDs.
 
     Parameters
@@ -224,9 +253,8 @@ def search_vacancies(text: str, page: int = 0) -> list[int]:
     )
 
     try:
-        # Получаем HTML через fetch_as_markdown, но нам нужен сырой HTML?
-        # fetch_as_markdown конвертирует в Markdown. Для извлечения ID из серпа
-        # удобнее сырой HTML: используем тот же транспорт/guards.
+        # Нужен сырой HTML (ID лежат в data-qa атрибутах серпа), поэтому берём
+        # fetch_page — тот же транспорт и тот же SSRF-guard, что и fetch_as_markdown.
         from hh_mcp.fetch import fetch_page
 
         html_bytes = fetch_page(url, timeout=TIMEOUT_S)
@@ -243,128 +271,10 @@ def search_vacancies(text: str, page: int = 0) -> list[int]:
         except ValueError:
             continue
     return ids
-@app.ui()
-def vacancy_app() -> Column:
-    """Open the vacancy viewer panel.
-
-    Returns
-    -------
-    Column
-        Prefab component tree: heading, hint text, numeric ID input and a
-        button that calls :func:`get_vacancy` via :class:`CallTool`.
-    """
-    id_input = Input(placeholder="ID вакансии…", name="vacancy_id")
-    return Column(
-        gap=4,
-        css_class="p-6 max-w-3xl mx-auto",
-        children=[
-            Heading("Просмотр вакансии"),
-            Text("Введите числовой ID вакансии и нажмите кнопку."),
-            id_input,
-            Button(
-                "Получить вакансию",
-                variant="default",
-                on_click=CallTool(
-                    tool="get_vacancy",
-                    arguments={"id": "{{ vacancy_id }}"},
-                    on_success=ShowToast("Готово", variant="success"),
-                    on_error=ShowToast("{{ $error }}", variant="error"),
-                ),
-            ),
-        ],
-    )
 
 
-@app.ui()
-def employer_app() -> Column:
-    """Open the employer viewer panel.
+# --- Registration (one tool for model + browser) -----------------------
 
-    Returns
-    -------
-    Column
-        Prefab component tree: heading, hint text, numeric ID input and a
-        button that calls :func:`get_employer` via :class:`CallTool`.
-    """
-    id_input = Input(placeholder="ID работодателя…", name="employer_id")
-    return Column(
-        gap=4,
-        css_class="p-6 max-w-3xl mx-auto",
-        children=[
-            Heading("Просмотр работодателя"),
-            Text("Введите числовой ID компании и нажмите кнопку."),
-            id_input,
-            Button(
-                "Получить информацию",
-                variant="default",
-                on_click=CallTool(
-                    tool="get_employer",
-                    arguments={"id": "{{ employer_id }}"},
-                    on_success=ShowToast("Готово", variant="success"),
-                    on_error=ShowToast("{{ $error }}", variant="error"),
-                ),
-            ),
-        ],
-    )
-
-
-@app.ui()
-def search_app() -> Column:
-    """Open the vacancy search panel.
-
-    Browser entry-point for :func:`search_vacancies` — the dev-UI picker
-    lists only tools carrying a Prefab ``resourceUri`` (i.e. ``@app.ui()``
-    ones), so this panel is what makes the search reachable from the web UI.
-
-    Returns
-    -------
-    Column
-        Prefab component tree: heading, hint text, query and page inputs, a
-        button that calls :func:`search_vacancies` via :class:`CallTool`, and
-        a result block showing the returned IDs.
-    """
-    text_input = Input(
-        placeholder="Поисковый запрос…", name="search_text", input_type="search"
-    )
-    page_input = Input(
-        placeholder="Номер страницы (с 0)",
-        name="search_page",
-        input_type="number",
-        value="0",
-        min=0,
-    )
-    return Column(
-        gap=4,
-        css_class="p-6 max-w-3xl mx-auto",
-        children=[
-            Heading("Поиск вакансий"),
-            Text("Введите запрос и номер страницы (с 0) — вернётся список ID."),
-            text_input,
-            page_input,
-            Button(
-                "Найти вакансии",
-                variant="default",
-                # Clear the previous result, then call the backend tool.
-                on_click=[
-                    SetState(key=RESULT_KEY, value=""),
-                    CallTool(
-                        tool="search_vacancies",
-                        arguments={
-                            "text": "{{ search_text }}",
-                            "page": "{{ search_page }}",
-                        },
-                        # Capture the tool result into client state so the
-                        # panel can render it (not only a toast).
-                        on_success=[
-                            SetState(key=RESULT_KEY, value=RESULT),
-                            ShowToast("Готово", variant="success"),
-                        ],
-                        on_error=ShowToast("{{ $error }}", variant="error"),
-                    ),
-                ],
-            ),
-            If(
-                condition=f"{{{{ {RESULT_KEY} }}}}",
-                children=[Code(content=f"{{{{ {RESULT_KEY} }}}}")],
-            ),
-        ],
-    )
+register_tool("vacancy", vacancy)
+register_tool("company", company)
+register_tool("search", search)
