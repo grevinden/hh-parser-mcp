@@ -10,9 +10,8 @@
 [`version`](src/hh_mcp/app.py) (какая сборка запущена).
 
 Каждый инструмент возвращает `ToolResult` **только** с `content`: ответ несёт
-данные ровно один раз. Браузерный Apps UI отключён намеренно — встроенный в
-ответ Prefab-view дублировал бы каждую страницу, и клиент, обходящий 20 ID,
-получал бы 40 страниц вместо 20 (см. [`docs/apps_mode.md`](docs/apps_mode.md)).
+данные ровно один раз — без второго `structuredContent` и без UI-копии
+(см. [`docs/apps_mode.md`](docs/apps_mode.md)).
 
 Запуск — нативный пускатель fastmcp из корня (`uv run fastmcp run` —
 MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузерный UI-превью).
@@ -42,16 +41,16 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
   Иерархия исключений — [`errors.py`](src/hh_mcp/fetch/errors.py).
 - **Запуск — нативный пускатель fastmcp** (`uv run fastmcp run` / `uv run
   fastmcp dev apps fastmcp.json`) из корня репозитория; транспорты stdio/http/sse.
-- **Никаких зависимостей на UI** — `prefab-ui` и экстра `fastmcp[apps]`
-  удалены, в коде нет ни одного импорта `prefab_ui`.
+- **Никаких зависимостей на UI** — в коде нет импортов UI-библиотек: ответ
+  несёт только `content`.
 - **Файловый кеш ответов** — `ResponseCachingMiddleware` + `FileTreeStore`
-  (без Redis) в [`server.py`](server.py): повторный вызов `vacancy` /
+  (без Redis) в [`cache/`](src/hh_mcp/cache/disk.py): повторный вызов `vacancy` /
   `company` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
   (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`;
   отключается флагом `HH_MCP_CACHE=0`).
-- **618 тестов** — `uv run pytest tests/ -v` (app, версия, конфиг деплоя,
-  семантический индекс, fetch-модуль, guards, html, links, converter,
-  orchestrator, transport, config, errors, enrich, caching).
+- **505 тестов** — `uv run pytest tests/ -q` (app, версия, конфиг деплоя,
+  fetch-модуль, guards, html, links, converter, orchestrator, transport,
+  config, errors, enrich, кеш).
 
 ---
 
@@ -87,9 +86,8 @@ cd /path/to/hh-mcp
 uv sync
 ```
 
-После `uv sync` становятся доступны:
-- все зависимости (`fastmcp`, `httpx2[http2]`, `markitdown`,
-  `upstash-search`).
+После `uv sync` становятся доступны все зависимости (`fastmcp`,
+`httpx2[http2]`, `markitdown`).
 
 > **Важно**: `pip install` не используется. Добавление зависимостей — только
 > через `uv add <pkg>`. Консольного скрипта `hh-mcp` нет и не создавать —
@@ -171,18 +169,11 @@ Dev-режим — нативный (`uv run fastmcp dev apps fastmcp.json`): MC
 `tools/call` с аргументами и JSON-ответами). Страницу вакансии интерфейс не
 рисует — UI-view в ответе намеренно нет, см. «Инструменты MCP».
 
-Прежний собственный dev-UI (`src/hh_mcp/devapp.py`, Starlette, страница
-`GET /` и REST `/api/*`) **удалён** — см. коммит `a30bcb9`.
+### Вызов инструментов без MCP-клиента
 
-### Вызов инструментов без MCP-клиента (CLI-мост)
-
-REST-интерфейс `/api/*` существовал у `src/hh_mcp/devapp.py` и **удалён**
-вместе с ним (коммит `a30bcb9`, dev-режим стал нативным `fastmcp dev apps`).
-Сейчас у сервера нет REST API; единственная HTTP-точка — MCP JSON-RPC
-на `/mcp`.
-
-Стандартный способ вызвать инструменты из шелла, скрипта или агента без
-MCP-клиента — клиентские команды fastmcp (`fastmcp list`, `fastmcp call`):
+Единственная HTTP-точка сервера — MCP JSON-RPC на `/mcp`. Вызвать инструменты
+из шелла, скрипта или агента можно клиентскими командами fastmcp
+(`fastmcp list`, `fastmcp call`):
 
 ```bash
 # Список инструментов
@@ -197,9 +188,6 @@ uv run fastmcp call http://127.0.0.1:8000/mcp company id=11620617 --json
 
 Более низкоуровневый вариант — прямой JSON-RPC запрос к `/mcp`
 (streamable HTTP, требуется рукопожатие initialize → `Mcp-Session-Id`).
-Направление «MCP → REST» из документации FastMCP реализуется только
-обёрткой в FastAPI (`FastMCP.from_fastapi` / `mcp.http_app`), см. gofastmcp.com
-/ integrations / fastapi.
 
 ---
 
@@ -210,7 +198,8 @@ uv run fastmcp call http://127.0.0.1:8000/mcp company id=11620617 --json
 
 - возврат `-> str` заставил бы fastmcp продублировать текст в
   `structuredContent.result` (wrap-result) — данные ушли бы в контекст дважды;
-- Prefab-view в `structured_content` — третья копия тех же данных.
+- UI-view (App/Prefab) в `structuredContent` — третья копия, поэтому
+  зависимостей на UI в проекте нет.
 
 Замер на живом сервере (`tools/call` по JSON-RPC): длина ответа ÷ длина текста —
 **1.04×** для `vacancy` и `company`, 1.24× для `search` (это JSON-обёртка),
@@ -222,7 +211,7 @@ uv run fastmcp call http://127.0.0.1:8000/mcp company id=11620617 --json
 | `company` | `id: int` (строго положительный) | Markdown страницы компании hh.ru |
 | `search` | `text: str`, `page: int = 0` | «Найдено N вакансий (страница P): …» — список ID |
 
-**Фильтры `search` зафиксированы** (`SEARCH_PARAMS` в `app.py`, ровно те
+**Фильтры `search` зафиксированы** (`SEARCH_PARAMS` в `service.py`, ровно те
 параметры, что шлёт сам hh.ru из drawer-фильтра): зарплата 2 раза в месяц,
 полная занятость, опыт от 1 года, только прямые работодатели (`not_from_agency`),
 готовые оформить по ТК, любой формат работы (удалённо / офис / гибрид), поиск по
@@ -237,7 +226,7 @@ uv run fastmcp call http://127.0.0.1:8000/mcp company id=11620617 --json
 | URI | Имя | Содержимое |
 |---|---|---|
 | `hh-mcp://search-guide` | `SearchGuide` | Markdown-справочник: зафиксированные фильтры, операторы поискового языка hh.ru (`!`, `"`, `~`, `*`, `AND`, `OR`, `NOT`, скобки), поиск по полям (`NAME:`, `COMPANY_NAME:`, `DESCRIPTION:`, `!ID`, `!COMPANY_ID`), рецепты и порядок работы. Текст — в [`search_guide.py`](src/hh_mcp/search_guide.py) |
-| `hh-mcp://version` | `BuildInfo` | JSON одной строкой: `version`, `commit`, `build`, `python`, `fastmcp`, `search`, `search_endpoint`, `search_error` |
+| `hh-mcp://version` | `BuildInfo` | JSON одной строкой: `version`, `commit`, `build`, `python`, `fastmcp` |
 
 **Инструмент или ресурс** — не украшение, а вопрос цены в токенах: тулза
 попадает в схему каждого запроса агента, и на бесполезную `version` он всё
@@ -250,12 +239,12 @@ URI ресурса назван в описании тулзы `search` — ин
 стандартном поле `serverInfo.version` ответа `initialize` — его читает любой
 MCP-клиент. Ресурс `hh-mcp://version` даёт то же плюс детали. Версия живёт в
 `[project].version` (`pyproject.toml`) и поднимается с каждым коммитом; локально
-`BUILD_ID` выглядит как `0.3.2+a1b2c3d` (версия + короткий коммит), на деплое —
-просто `0.3.2`, потому что `.git` в артефакте нет.
+`BUILD_ID` выглядит как `0.4.0+a1b2c3d` (версия + короткий коммит), на деплое —
+просто `0.4.0`, потому что `.git` в артефакте нет.
 
 **Валидация**: `id <= 0` → `ToolError("Invalid ID: …")` до HTTP-запроса.
-**Ошибки fetch** маппятся в `ToolError` (см. `_tool_error()` в
-[`app.py`](src/hh_mcp/app.py)).
+**Ошибки fetch** маппятся в `ToolError` (см. `tool_error()` в
+[`service.py`](src/hh_mcp/service.py)).
 
 **Понятные сообщения вместо кодов.** Ответ 4xx/5xx поднимает
 `HttpStatusError` (подкласс `TransportError`) — он несёт `status_code`, `url`
@@ -308,74 +297,35 @@ http://127.0.0.1:8000/mcp
 
 ---
 
-## Кеширование ответов: два уровня
+## Кеширование ответов
 
-Страница (вакансия / работодатель) берётся из первого уровня, который её
-знает: **диск → база → сайт**.
+Штатный `ResponseCachingMiddleware` с файловым хранилищем `FileTreeStore`
+(без Redis) подключается в `server.py`.
 
-| Уровень | Где | Ключ | TTL | Отключение |
-|---|---|---|---|---|
-| 1. Диск | `~/.cache/hh-mcp` | инструмент + аргументы | 1 час | `HH_MCP_CACHE=0` |
-| 2. База | Upstash Search документ | `vacancy/38185674` | 24 часа | нет `UPSTASH_SEARCH_*` |
-| 3. Сайт | hh.ru | — | — | всегда |
+| Где | Ключ | TTL | Отключение |
+|---|---|---|---|
+| `~/.cache/hh-mcp` | инструмент + аргументы | 1 час | `HH_MCP_CACHE=0` |
 
-**Уровень 1 — диск.** Штатный `ResponseCachingMiddleware` с файловым хранилищем
-`FileTreeStore` (`server.py`). Кешируются только успешные ответы `vacancy` /
-`company` (`search` исключён: выдача меняется от страницы к странице). Каталог
-по умолчанию `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`, кеш
-переживает рестарт сервера. `HH_MCP_CACHE=0` (также `off` / `false` / `no`)
-отключает middleware вовсе.
+Кешируются только успешные ответы `vacancy` / `company`; `search` исключён —
+его выдача меняется от страницы к странице. Каталог переопределяется
+`HH_MCP_CACHE_DIR`, кеш переживает рестарт сервера. `HH_MCP_CACHE=0` (также
+`off` / `false` / `no`) отключает middleware вовсе, и каталог тогда не
+создаётся.
 
-**Уровень 2 — база.** Те же документы Upstash Search, что и для семантики,
-читаются по идентификатору (`fetch(ids=["vacancy/38185674"])`). Свежесть
-проверяется по записанному `fetched_at`: старый документ пропускается, и
-непроверяемый (без метки) тоже — свежесть должна быть доказуемой. TTL задаётся
-`HH_MCP_SEARCH_TTL_S` (по умолчанию `86400` секунд). Страницы длиннее 4 КиБ
-хранятся частями и из базы не отдаются: половина страницы — не страница.
-
-**Порядок чтения** виден в логе — каждая строка говорит, кто ответил:
+Каждое решение видно в логе — ключ и размер, но никогда текст страницы:
 
 ```
 INFO: disk cache miss: key=dba9f90f…
-INFO: db cache hit: id=employer/671766 chars=2129 age=54s
-INFO: page served from db tier: url=https://hh.ru/employer/671766
-INFO: disk cache write: key=dba9f90f… chars=2214 ttl=3600
+INFO: page fetched from hh.ru: url=https://hh.ru/vacancy/38185674 chars=6289
+INFO: disk cache write: key=dba9f90f… chars=6289 ttl=3600
 ```
-
-Разбитая на части страница (см. «Индексация в Upstash Search») из базы **не
-отдаётся** — часть не является страницей:
-
-```
-INFO: db cache miss: id=vacancy/138156968 split into 5 parts, cache needs the whole page
-INFO: page fetched from hh.ru: url=https://hh.ru/vacancy/138156968 chars=6289
-INFO: db cache write: id=vacancy/138156968 chars=6289 bytes=10911 parts=5 (largest part 4095 bytes, limit 4096)
-INFO: db tier: id=vacancy/138156968 is split, so it will not be served from the cache tier
-```
-
-При промахе обоих уровней:
-
-```
-INFO: disk cache miss: key=80f5072a…
-INFO: db cache miss: id=employer/2163044 no document
-INFO: page not in db tier, going to hh.ru: url=https://hh.ru/employer/2163044
-INFO: page fetched from hh.ru: url=https://hh.ru/employer/2163044 chars=3027
-INFO: db cache write: id=employer/2163044 chars=3027 bytes=3726
-INFO: disk cache write: key=80f5072a… chars=3112 ttl=3600
-```
-
-Текст страницы в лог не попадает — только идентификатор и размер. `chars=` —
-символы, `bytes=` — вес в UTF-8: для русского текста это разные числа, а
-Upstash считает именно байты, поэтому в строке записи указаны оба.
 
 ```bash
 # Пример: другой каталог дискового кеша
 HH_MCP_CACHE_DIR=/var/cache/hh-mcp uv run fastmcp run
 
-# Пример: без дискового кеша (но с базой)
+# Пример: без кеша
 HH_MCP_CACHE=0 uv run fastmcp run
-
-# Пример: документ из базы живёт всего час
-HH_MCP_SEARCH_TTL_S=3600 uv run fastmcp run
 ```
 
 ### Логи
@@ -390,81 +340,6 @@ HH_MCP_SEARCH_TTL_S=3600 uv run fastmcp run
 > Каталог кеша удаляйте **только при остановленном сервере**: живой
 > `FileTreeStore` держит открытые дескрипторы и без каталога падает с
 > `FileNotFoundError`.
-
----
-
-## Семантический индекс (Upstash Search)
-
-Каждый успешный fetch вакансии или работодателя (best-effort, ошибки
-индексации никогда не видны в ответе) кладёт страницу в Upstash Search.
-Документ намеренно минимальный — столько полей, сколько нужно для поиска «по
-номеру или по смыслу»:
-
-```json
-{
-  "id": "vacancy/38185674",
-  "content": {"text": "# Ведущий программист 1С\n\nОпыт с 1С, удалённо."},
-  "metadata": {"fetched_at": "2026-10-08T16:20:31.482130+00:00"}
-}
-```
-
-- **id** — путь страницы, поэтому документ находится по номеру, работодатель
-  не collide-ится с вакансией того же номера, а URL восстанавливается как
-  `https://hh.ru/{id}`;
-- **content** — одно поле `text`: Upstash эмбедит все поля content, то есть
-  это и есть семантический индекс;
-- **metadata** — только время чтения страницы. `url`, `source` и `type` не
-  хранятся: они выводятся из id, а дубликат рано или поздно с ним разойдётся.
-
-Настройка — переменные окружения `UPSTASH_SEARCH_REST_URL`,
-`UPSTASH_SEARCH_REST_TOKEN`, `UPSTASH_SEARCH_INDEX` (по умолчанию `hh_mcp`).
-Upstash отвергает документ, чей `content` длиннее **4096 байт UTF-8**, поэтому
-страница разбивается на части: часть 1 лежит под обычным id страницы
-(`vacancy/138156968`), остальные — с суффиксом (`vacancy/138156968~2`), и в
-`metadata` добавляются `part` и `parts`. Разрез идёт по границе UTF-8 и, где
-возможно, по границе абзаца; склейка частей даёт страницу байт в байт. Обрезать
-текст нельзя — потерянный хвост описания не ищется.
-
-Значение URL нормализуются (`search_index.normalize_url`): подставляется
-`https://`, если схемы нет, снимаются кавычки и хвостовой слэш. Без этого httpx
-отвечает `UnsupportedProtocol` на первом же запросе — ошибка выглядит как
-«индекс не работает», хотя верен адрес. Что именно понял сервер, показывает
-ресурс `hh-mcp://version` → `search_endpoint` (только хост, без токена).
-Страница, пришедшая из базы, повторно не индексируется: запись идёт только
-после реального чтения hh.ru.
-
-> Переменные нужно задать **в окружении развёрнутого сервера**. `fastmcp.json`
-> их не задаёт: Horizon игнорирует `deployment.env`, а `.env` из репозитория на
-> деплой не попадает.
-
-Индексация best-effort: ошибка записи никогда не попадает в ответ инструмента.
-Но «тихо ничего не пишется» неотличимо от «всё работает», поэтому ресурс
-`hh-mcp://version` диагностирует бэкенд — поле `search` и текст ошибки в
-`search_error`:
-
-| `search` | Что означает |
-|---|---|
-| `ready` | учётные данные приняты, эндпоинт отвечает |
-| `missing` | нет `UPSTASH_SEARCH_REST_URL` / `..._TOKEN` в окружении |
-| `unavailable` | клиент не собрался (например, нет пакета `upstash_search`) |
-| `error` | эндпоинт отказал (сеть или авторизация) |
-
-Проверка — чтение (`list_indexes`), а не запись: она различает «нет ключей»,
-«нет библиотеки» и «эндпоинт не отвечает», ничего не создавая. Если проба
-здорова, а записи всё равно нет, причина — в `search_error`: туда попадает и
-ошибка последней записи.
-
-Порядок диагностики при жалобе «в базу ничего не пишется»:
-
-1. `hh-mcp://version` → `search`: не `ready`, смотрим `search_error`;
-2. `search_endpoint` показывает хост, который сервер понял из окружения, —
-   сравнить с хостом, который задан на самом деле;
-3. в логах искать `db cache write:` для нужного `id` — если строки нет,
-   до базы дело не дошло; если `UnsupportedProtocol` — переменная окружения
-   исправляется в панели развёртывания, а не в коде.
-
-> Тесты никогда не пишут в живой индекс: `tests/conftest.py` подменяет вызов
-> на копилку и убирает `UPSTASH_SEARCH_*` из окружения.
 
 ---
 
@@ -506,16 +381,15 @@ Horizon читает [`fastmcp.json`](fastmcp.json) и считает его **�
 
 Что Horizon **не** поддерживает:
 
-- `deployment.env` игнорируется — значения (`HH_MCP_CACHE`, `HH_MCP_CACHE_DIR`,
-  `UPSTASH_SEARCH_REST_URL/TOKEN/INDEX`) задаются как **environment variables**
-  сервера в Horizon;
+- `deployment.env` игнорируется — значения (`HH_MCP_CACHE`, `HH_MCP_CACHE_DIR`)
+  задаются как **environment variables** сервера в Horizon;
 - `environment.editable` не поддерживается — пакеты перечисляются в
   `environment.dependencies`;
 - если в настройках сервера указан **dependency file**, он имеет приоритет над
   `fastmcp.json` (тогда `project` игнорируется).
 
 Сборка: таймаут 15 минут; зависимости устанавливаются frozen-синком из
-`uv.lock`, поэтому лишних пакетов (например, `playwright`) в образ не попадает.
+`uv.lock`, поэтому лишних пакетов в образ не попадает.
 
 ---
 
@@ -526,22 +400,16 @@ Horizon читает [`fastmcp.json`](fastmcp.json) и считает его **�
 uv run pytest tests/ -v
 ```
 
-**618 тестов**, все passed. Покрытие:
+**505 тестов**, все passed. Покрытие:
 - `test_mcp_app.py` — инструменты, валидация, error mapping, точный набор
   фильтров `search` и сохранность операторов, контракт «одна копия данных в
   ответе», отсутствие UI-meta, регистрация и содержимое обоих ресурсов
   (включая проверку, что `version` — не тулза, а справочник документирует все
   операторы и все зафиксированные фильтры);
-- `test_version.py` — версия из метаданных пакета, коммит, `BUILD_ID`,
+- `test_version.py` — версия из `pyproject.toml`, коммит, `BUILD_ID`,
   `runtime_info`;
 - `test_fastmcp_json.py` — конфиг деплоя: транспорт, `log_level` не `DEBUG`,
   `environment.project`, entrypoint;
-- `test_search_index.py` — форма документа в Upstash Search на фейковом
-  клиенте (id = путь страницы, content = `text`, metadata = `fetched_at`);
-- `test_indexing_guard.py` — индексация только при реальном fetch; тесты не
-  пишут в живой индекс (`tests/conftest.py` подменяет вызов и чистит
-  `UPSTASH_SEARCH_*` из окружения);
-- `test_cache_tiers.py` — порядок «диск → база → сайт» и логи каждого шага;
 - `test_disk_cache_logging.py` — `LoggingFileTreeStore`: hit/miss/write в лог,
   размер вместо содержимого;
 - `test_caching.py` — файловый кеш: повторный id не дёргает fetch; флаг
@@ -562,30 +430,35 @@ uv run pytest tests/ -v
 ## Архитектура
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                      hh-mcp                              │
-│  src/hh_mcp/                                             │
-│  ├── __init__.py         — версия пакета (0.1.0)         │
-│  ├── app.py              — FastMCP + 3 инструмента (Tools)  │
-│  └── fetch/              — fetch-пайплайн (SOLID)        │
-│      ├── __init__.py     — публичное API                 │
-│      ├── config.py       — RequestConfig / NoisePolicy   │
-│      ├── errors.py       — иерархия исключений           │
-│      ├── guards.py       — SSRF-защита (UrlGuard)        │
-│      ├── transport.py    — HTTP-транспорт (httpx2, HTTP2)│
-│      ├── html.py         — HTML-санитайзер               │
-│      ├── converter.py    — HTML → Markdown (markitdown)  │
-│      ├── links.py        — разрешение относительных ссылок│
-│      ├── enrich.py       — обогащение employer-карточки  │
-│      └── orchestrator.py — FetchService + fetch_as_markdown│
-├── server.py              — entry point пускателя (fastmcp)│
-├── fastmcp.json           — конфиг нативного запуска      │
-├── docs/                  — проектные документы           │
-│   ├── apps_mode.md       — режим приложений (рус.)       │
-│   ├── plan_mcp_app.md    — архитектурный план (рус.)     │
-│   └── fetch_redesign.md  — SOLID-спецификация fetch     │
-├── pyproject.toml         — метаданные, зависимости       │
-└── AGENTS.md              — конвенции для агентов         │
+src/hh_mcp/
+├── __init__.py         логгер пакета (hh_mcp)
+├── app.py              поверхность MCP: 3 тулзы, 2 ресурса
+├── service.py          ходы на hh.ru: URL страниц, фильтры, текст ошибок
+├── search_guide.py     текст ресурса hh-mcp://search-guide
+├── version.py          версия сборки (pyproject.toml + короткий коммит)
+├── llms.txt            заметки по слою
+├── cache/              дисковый кеш ответов
+│   ├── __init__.py     логгер слоя кеша (hh_mcp.cache)
+│   ├── disk.py         FileTreeStore + ResponseCachingMiddleware
+│   └── llms.txt        заметки по слою
+└── fetch/              fetch-пайплайн (SOLID/DIP)
+    ├── __init__.py     публичное API
+    ├── config.py       RequestConfig / NoisePolicy
+    ├── errors.py       иерархия исключений
+    ├── guards.py       SSRF-защита (UrlGuard)
+    ├── transport.py    HTTP-транспорт (httpx2, HTTP/2)
+    ├── html.py         HTML-санитайзер
+    ├── converter.py    HTML → Markdown (markitdown)
+    ├── links.py        разрешение относительных ссылок
+    ├── enrich.py       обогащение employer-карточки
+    ├── orchestrator.py FetchService + fetch_as_markdown
+    └── llms.txt        заметки по слою
+
+server.py               entry point пускателя (fastmcp)
+fastmcp.json            конфиг нативного запуска
+docs/                   проектные документы
+pyproject.toml          метаданные, зависимости
+AGENTS.md               конвенции для агентов
 ```
 
 ### Жизненный цикл запроса
@@ -636,14 +509,13 @@ uv run fastmcp dev apps fastmcp.json
 
 ### 403 / антибот от hh.ru
 
-Если hh.ru начинает блокировать HTTP-запросы (403 Forbidden), выход —
-browser-fetch в режиме Headless Chrome: потребуется вернуть `playwright`
-в зависимости и подключить его в fetch-пайплайне. Сейчас он не используется,
-поэтому и не зависит.
+Если hh.ru начинает блокировать HTTP-запросы (403 Forbidden), текст ошибки
+говорит об этом прямо («hh.ru blocked the request (HTTP 403)»). Обхода в
+проекте нет: запросы идут обычным HTTP-клиентом без браузера.
 
 ### SSRF-защита
 
-`UrlGuard` ([`guards.py`](src/hh_mcp/fetch/guards.py:31)) отклоняет URL:
+`UrlGuard` ([`guards.py`](src/hh_mcp/fetch/guards.py)) отклоняет URL:
 - с схемой, отличной от `http`/`https`;
 - с логином/паролем (userinfo);
 - с hostname, указывающими на локальные адреса (`localhost`, зоны `.local`,
@@ -660,10 +532,10 @@ validate_url("https://example.com:443")   # → OK
 
 | Механизм | Реализация |
 |----------|-----------|
-| **SSRF-guard** | [`UrlGuard`](src/hh_mcp/fetch/guards.py:31) — URL-валидация до HTTP-запроса |
+| **SSRF-guard** | [`UrlGuard`](src/hh_mcp/fetch/guards.py) — URL-валидация до HTTP-запроса |
 | **TLS verify** | `RequestConfig(verify_tls=True)` — проверка сертификатов |
 | **Max body** | 4 MiB — `RequestConfig(max_body_bytes=4_194_304)` |
-| **NoisePolicy** | [`config.py`](src/hh_mcp/fetch/config.py:65) — удаление навигации, рекламы, скриптов |
+| **NoisePolicy** | [`config.py`](src/hh_mcp/fetch/config.py) — удаление навигации, рекламы, скриптов |
 
 ---
 
@@ -681,8 +553,9 @@ uv run pytest tests/ -v
 ```
 
 Все изменения следуют конвенциям [`AGENTS.md`](AGENTS.md): double quotes,
-numpydoc-доки на английском, `__all__`-экспорты, константы `SCREAMING_SNAKE_CASE`,
-PEP 604 (`X | None`), PEP 695.
+`__all__`-экспорты, константы `SCREAMING_SNAKE_CASE`, PEP 604 (`X | None`),
+PEP 695. Комментарий — одна-две строки про «почему»; длинные пояснения живут в
+`llms.txt`, а не в модулях.
 
 ---
 
@@ -692,5 +565,7 @@ PEP 604 (`X | None`), PEP 695.
 - [`docs/apps_mode.md`](docs/apps_mode.md) — режим приложений: интерактивные инструменты (рус.)
 - [`docs/fetch_redesign.md`](docs/fetch_redesign.md) — SOLID-спецификация fetch (англ.)
 - [`AGENTS.md`](AGENTS.md) — конвенции проекта для агентов
-- [`src/hh_mcp/app.py`](src/hh_mcp/app.py) — главный модуль приложения
+- [`src/hh_mcp/llms.txt`](src/hh_mcp/llms.txt), [`fetch/llms.txt`](src/hh_mcp/fetch/llms.txt), [`cache/llms.txt`](src/hh_mcp/cache/llms.txt) — заметки по слоям
+- [`src/hh_mcp/app.py`](src/hh_mcp/app.py) — поверхность MCP
+- [`src/hh_mcp/service.py`](src/hh_mcp/service.py) — ходы на hh.ru
 - [`server.py`](server.py) — entry point нативного пускателя
