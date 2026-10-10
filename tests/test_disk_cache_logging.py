@@ -9,7 +9,6 @@ of the contract: sizes and keys, never the cached page itself.
 from __future__ import annotations
 
 import asyncio
-import logging
 from pathlib import Path
 
 import pytest
@@ -25,7 +24,6 @@ BODY = "Тело страницы. " * 40
 
 def _store(tmp_path: Path) -> LoggingFileTreeStore:
     return LoggingFileTreeStore(
-        logger=logging.getLogger("hh_mcp.cache.test"),
         data_directory=tmp_path,
         key_sanitization_strategy=FileTreeV1KeySanitizationStrategy(tmp_path),
         collection_sanitization_strategy=FileTreeV1CollectionSanitizationStrategy(
@@ -64,7 +62,7 @@ class TestLogging:
 
     def test_miss_is_logged(self, tmp_path, caplog):
         store = _store(tmp_path)
-        with caplog.at_level("INFO", logger="hh_mcp.cache.test"):
+        with caplog.at_level("INFO", logger="hh_mcp.cache"):
             asyncio.run(store.get("absent-key"))
         assert "disk cache miss" in caplog.text
         assert "absent-key" in caplog.text
@@ -73,7 +71,7 @@ class TestLogging:
         store = _store(tmp_path)
         payload = {"content": [{"type": "text", "text": BODY}]}
 
-        with caplog.at_level("INFO", logger="hh_mcp.cache.test"):
+        with caplog.at_level("INFO", logger="hh_mcp.cache"):
             asyncio.run(store.put("k1", payload, ttl=3600))
             value = asyncio.run(store.get("k1"))
 
@@ -87,7 +85,7 @@ class TestLogging:
         store = _store(tmp_path)
         asyncio.run(store.put("k2", {"content": BODY}))
 
-        with caplog.at_level("INFO", logger="hh_mcp.cache.test"):
+        with caplog.at_level("INFO", logger="hh_mcp.cache"):
             asyncio.run(store.get("k2"))
 
         sizes = [

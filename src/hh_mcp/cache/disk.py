@@ -10,19 +10,20 @@ See :func:`attach`.
 
 from __future__ import annotations
 
-import logging
 import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
-from fastmcp.server.middleware.caching import ResponseCachingMiddleware
+from fastmcp.server.middleware.caching import ResponseCachingMiddleware, CallToolSettings
 from key_value.aio.stores.filetree import (
     FileTreeStore,
     FileTreeV1CollectionSanitizationStrategy,
     FileTreeV1KeySanitizationStrategy,
 )
+
+from hh_mcp.cache import logger
 
 __all__ = [
     "CACHE_DIR",
@@ -36,10 +37,8 @@ __all__ = [
 
 # --- Configuration ---------------------------------------------------------
 
-logger = logging.getLogger("hh_mcp.cache")
-
 CACHE_DIR: Path = Path(
-    os.environ.get("HH_MCP_CACHE_DIR", "~/.cache/hh-mcp")
+    os.environ.get("HH_MCP_CACHE_DIR", Path.home() / ".cache" / "hh_mcp")
 ).expanduser()
 """Directory for the file-backed response cache (override via env)."""
 
@@ -92,13 +91,11 @@ class LoggingFileTreeStore(FileTreeStore):
     their content, which is a whole vacancy page.
     """
 
-    def __init__(self, *, logger: logging.Logger, **kwargs: Any) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Build the store and remember where to log.
 
         Parameters
         ----------
-        logger:
-            Logger to write the cache decisions to.
         **kwargs:
             Forwarded verbatim to :class:`FileTreeStore`.
         """
@@ -196,7 +193,6 @@ def attach(mcp: FastMCP) -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     store = LoggingFileTreeStore(
-        logger=logger,
         data_directory=CACHE_DIR,
         key_sanitization_strategy=FileTreeV1KeySanitizationStrategy(CACHE_DIR),
         collection_sanitization_strategy=FileTreeV1CollectionSanitizationStrategy(
@@ -207,10 +203,9 @@ def attach(mcp: FastMCP) -> None:
     mcp.add_middleware(
         ResponseCachingMiddleware(
             cache_storage=store,
-            call_tool_settings={
-                "ttl": CACHE_TTL_S,
-                "included_tools": list(CACHED_TOOLS),
-            },
+            call_tool_settings=CallToolSettings(
+                ttl=CACHE_TTL_S, included_tools=list(CACHED_TOOLS)
+            ),
         )
     )
     logger.info(
