@@ -1,0 +1,23 @@
+# fetch/ — сеть
+
+Строка URL → чистый Markdown. Слой не знает ни про hh.ru (URL страниц, фильтры —
+в service.py), ни про MCP.
+
+Конвейер: guards (SSRF) → transport (httpx2, HTTP/2, 4 МиБ, 10 редиректов) →
+html (Sanitizer + NoisePolicy: выделить <main>, снять шум, достать title) →
+links (относительные → абсолютные, снять переходные параметры) → converter
+(markitdown) → normalize_markdown (убрать картинки, свернуть U+00A0/U+202F/U+2007
+в пробел, схлопнуть пустые строки, автоссылки). Для вакансий дальше enrich.py:
+вытащить работодателя, сжать его карточку, врезать под `## About the employer:
+<name>`, убрать внутренние ссылки hh.ru.
+
+DIP: transport.py — единственный импорт httpx2; converter.py — единственный
+импорт markitdown; orchestrator зависит от протоколов FetchTransport и
+MarkdownConverter, а не от библиотек. guards.py — единственное место, где
+принимается SSRF-решение.
+
+Состояния нет: фабрики создают объекты на каждый вызов, глобальных клиентов и
+клиентов-пулов нет.
+
+errors.py: SSRError и InvalidURLError — ValueError (граница API), FetchError —
+зонтик ошибок fetch, TransportError — его подкласс для сети.

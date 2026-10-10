@@ -1,12 +1,4 @@
-"""Configuration objects for the fetch package.
-
-Immutable configuration (``frozen=True, slots=True``) with strict validation
-in ``__post_init__``. Defaults live in module-level constants — the single
-source of truth; dataclass field initializers reference those constants.
-
-No mutable state, no singletons: the factories below are plain functions
-that return freshly allocated instances.
-"""
+"""Configuration objects for the fetch package."""
 
 from __future__ import annotations
 
@@ -68,28 +60,22 @@ PUBLIC_DEFAULT_MAX_CHARS = 120_000
 # Employer card enrichment
 # ---------------------------------------------------------------------------
 
-#: The employer embedded card is capped in characters (kept compact so the
-#: vacancy output stays readable); the card body is demoted to H4 under
-#: the ``## About the employer: <name>`` section.
+#: Cap on the embedded employer card, kept compact; the body is demoted to H4.
 EMPLOYER_MAX_CHARS = 2_500
 
-#: Maximum Markdown characters of the fetched employer page before the
-#: card cleaning step (the card itself is then capped at
-#: ``EMPLOYER_MAX_CHARS``).
+#: Cap on the fetched employer page before card cleaning
+#: (the card itself is then capped at ``EMPLOYER_MAX_CHARS``).
 EMPLOYER_FETCH_MAX_CHARS = 20_000
 
 # ---------------------------------------------------------------------------
 # Internal link stripping
 # ---------------------------------------------------------------------------
 
-#: Root domains that mark a link as internal (everything else, including
-#: ``*.hhcdn.ru`` CDN and arbitrary third-party hosts, is preserved).  The
-#: check compares the registered host suffix: ``hh.ru`` and any subdomain
-#: of it (e.g. ``kolomna.hh.ru``) are internal.
+#: Link hosts that count as internal: ``hh.ru`` and its subdomains. Everything
+#: else (``*.hhcdn.ru``, third-party) is preserved.
 INTERNAL_ROOT_DOMAINS: tuple[str, ...] = ("hh.ru",)
 
-#: Job-URL path markers: the registered host is *not* hh.ru, but the path
-#: starts with one of these (e.g. ``vacancy11620617.hh.ru``).
+#: Path prefixes that mark a link internal even when the host is not hh.ru.
 INTERNAL_PATH_MARKERS: tuple[str, ...] = ("/vacancy/", "/employer/", "/company/")
 
 #: Substrings that mark a Markdown heading as the *start of the employer
@@ -115,22 +101,12 @@ MAX_BODY_BYTES_LIMIT = 64 * 1024 * 1024  # 64 MiB
 # Images
 # ---------------------------------------------------------------------------
 
-#: Elements that carry an image (or an image candidate) and are removed
-#: wholesale by the Sanitizer — a Markdown description never needs a picture.
-#:
-#: ``img``: the picture itself.  ``picture`` / ``source``: the responsive
-#: variants of the very same picture (a ``<picture>`` wrapper exists only to
-#: hold them).
-#:
-#: Removing the *tag* rather than the ``src`` is deliberate: the ``alt`` text
-#: is an attribute, so it disappears with the tag instead of surviving as a
-#: dangling word ("Мужчина и женщина" next to nothing).  ``svg`` is already
-#: noise via :data:`NoisePolicy.remove_elements`.
+#: Image-bearing elements, removed whole: ``img`` is the picture, ``picture`` /
+#: ``source`` are its responsive variants. The *tag* goes, not just ``src``, so
+#: the ``alt`` text vanishes with it instead of dangling as a stray word.
 IMAGE_ELEMENTS: frozenset[str] = frozenset({"img", "picture", "source"})
 
-#: Query-string keys dropped from URLs as click-tracking / analytics
-#: parameters (``utm_*`` is matched by prefix, see
-#: :func:`hh_mcp.fetch.links.clean_query_params`).
+#: Query keys dropped as click-tracking / analytics (``utm_*`` by prefix).
 TRACKING_QUERY_KEYS: frozenset[str] = frozenset(
     {
         "hhtmfrom",
@@ -148,20 +124,14 @@ TRACKING_QUERY_KEYS: frozenset[str] = frozenset(
 #: Tracking keys matched by prefix (compared case-insensitively).
 TRACKING_QUERY_KEY_PREFIXES: tuple[str, ...] = ("utm_",)
 
-#: ``href`` substrings that mark an anchor as a boilerplate CTA
-#: (e.g. the "Откликнуться" button on employer/vacancy listing pages);
-#: the entire element is dropped by the Sanitizer.
+#: ``href`` substrings marking a boilerplate CTA (the whole element is dropped).
 DROP_HREF_SUBSTRINGS: tuple[str, ...] = ("applicant/vacancy_response",)
 
-#: ``data-qa`` value of the fact cells in the employer sidebar.  hh.ru
-#: renders each cell as value + caption in sibling ``cell-text-content``
-#: spans; the cards that hold them are dropped via :data:`NOISE_DATA_QA`.
+#: ``data-qa`` of the employer-sidebar fact cells (cards dropped via NOISE_DATA_QA).
 FACT_CELL_QA: str = "cell-text-content"
 
-#: Captions of the employer sidebar facts ("Город", "Сферы деятельности",
-#: "Тип регистрации", "Сайт").  A caption that survives the removal of its
-#: card (e.g. the "Сайт" caption rendered inside the description widget)
-#: is left dangling in the output, so such orphans are dropped.
+#: Captions of the employer sidebar facts; a caption whose card was removed
+#: (the "Сайт" one inside the description widget) would dangle, so orphans go.
 ORPHAN_FACT_LABELS: frozenset[str] = frozenset(
     {
         "сайт",
@@ -173,27 +143,11 @@ ORPHAN_FACT_LABELS: frozenset[str] = frozenset(
     }
 )
 
-#: ``data-qa`` attribute values that mark an element as noise
-#: (matched case-insensitively). These are layout artifacts (separator
-#: glyphs, widget scaffolding) that survive class-based filtering.
-#:
-#: ``employer-page-company-info``: the employer-page fact cards in the
-#: right column — "Город" / "Сферы деятельности" / "Тип регистрации"
-#: (``data-qa="company-info-*"`` cells).  The description proper lives
-#: in a separate ``div.g-user-content`` block, which is kept.
-#:
-#: NOTE: ``sidebar-company-site`` (the employer's website card) is NOT
-#: noise: the website is content the caller explicitly wants in the
-#: Markdown, so the card survives and yields an external link.
-#:
-#: ``competitor-companies-*`` / ``branded-employer-gallery``: the
-#: "Ещё компании для вас" recommendation widget on employer pages — its
-#: heading, its tooltip activator and the horizontally scrollable card
-#: strip (logo, name, "N активных вакансий", "Посмотреть").  Without the
-#: strip being dropped, sanitisation leaves it as bare text: the internal
-#: "Посмотреть" links are stripped later by
-#: :func:`~hh_mcp.fetch.enrich.remove_internal_links`, which keeps the label
-#: and yields "ПосмотретьN активных вакансий" noise in the Markdown.
+#: ``data-qa`` values marking layout noise (case-insensitive):
+#: ``employer-page-company-info`` — sidebar fact cards (the description itself
+#: is a separate ``g-user-content`` block, kept); ``competitor-companies-*`` /
+#: ``branded-employer-gallery`` — the "Ещё компании для вас" widget.
+#: ``sidebar-company-site`` is NOT noise: the website is content.
 NOISE_DATA_QA: frozenset[str] = frozenset(
     {
         "employer-page-reviews-badges-separator",
@@ -279,39 +233,7 @@ NOISE_CLASS_PREFIXES: frozenset[str] = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class NoisePolicy:
-    """Elements/attributes the Sanitizer removes as boilerplate.
-
-    Attributes:
-        remove_elements:
-            Tag names (lowercase) whose entire subtree is removed (a void
-            element carries no subtree — it is removed as a single tag).
-        remove_classes:
-            ``class`` tokens (e.g. ``"hidden"``) that mark an element as
-            noise; matching is case-insensitive, exact token only.
-        remove_class_prefixes:
-            ``class``-token prefixes (e.g. ``"bottom-section"``) that mark
-            an element as noise; used for build-generated classes with
-            hash suffixes (``bottom-section--abc123``). Case-insensitive.
-        remove_attrs_prefix:
-            Attribute-name prefixes (e.g. ``"data-ad"``) that mark an
-            element as noise.
-        drop_href_substrings:
-            Substrings of the ``href`` attribute (compared
-            case-insensitively) that mark an element as a drop target —
-            the entire subtree is removed (boilerplate CTAs such as the
-            "Откликнуться" response buttons).
-        remove_data_qa:
-            ``data-qa`` attribute values (compared case-insensitively)
-            that mark an element as noise (layout artifacts left over
-            after class-based filtering).
-        main_extraction:
-            When ``True`` the Sanitizer keeps only the content of the
-            first ``<main>`` element (main-block extraction): content
-            before ``<main>`` (header / nav / cookie banners) and after
-            it (footer) is dropped.  A document without ``<main>``
-            passes through unchanged (lenient).  When ``False`` the
-            whole document is kept.
-    """
+    """Elements/attributes the Sanitizer removes as boilerplate."""
 
     remove_elements: frozenset[str] = frozenset(
         {
@@ -342,19 +264,7 @@ class NoisePolicy:
     main_extraction: bool = True
 
     def is_noise(self, tag: str, attrs: Mapping[str, str | None]) -> bool:
-        """Return ``True`` if the element is noise per this policy.
-
-        Args:
-            tag:
-                Element tag name (any case).
-            attrs:
-                Attribute mapping as produced by
-                :class:`html.parser.HTMLParser` (value may be ``None``).
-
-        Returns:
-            bool
-                ``True`` when the element must be removed.
-        """
+        """Return ``True`` if the element is noise per this policy."""
         tag_lower = tag.lower()
         if tag_lower in self.remove_elements:
             return True
@@ -389,32 +299,7 @@ class NoisePolicy:
 
 @dataclass(frozen=True, slots=True)
 class RequestConfig:
-    """HTTP transport configuration (immutable).
-
-    Attributes:
-        user_agent:
-            ``User-Agent`` header value; must be non-empty.
-        timeout:
-            HTTP timeout in seconds; ``MIN_TIMEOUT`` <= value <=
-            ``MAX_TIMEOUT``.
-        max_body_bytes:
-            Maximum response body size in bytes.
-        max_redirects:
-            Maximum number of redirects to follow (0 disables following).
-        max_connections:
-            Maximum open connections in the client pool.
-        max_keepalive:
-            Max keep-alive connections; must not exceed ``max_connections``.
-        verify_tls:
-            Whether TLS certificates are verified.
-        strict_content_type:
-            When ``True``, a non-HTML response Content-Type raises
-            :class:`~hh_mcp.fetch.errors.UnsupportedContentTypeError`;
-            when ``False`` (default, back-compat) it only logs a
-            WARNING and the conversion proceeds.
-        noise:
-            Noise policy used by the HTML sanitizer.
-    """
+    """HTTP transport configuration (immutable)."""
 
     user_agent: str = DEFAULT_USER_AGENT
     timeout: float = DEFAULT_TIMEOUT
@@ -427,13 +312,7 @@ class RequestConfig:
     noise: NoisePolicy = NoisePolicy()
 
     def __post_init__(self) -> None:
-        """Validate fields; raise :class:`ValueError` with the field name.
-
-        Raises:
-            ValueError:
-                On any constraint violation. The message always starts with
-                the offending field name (``"<field>: <reason>"``).
-        """
+        """Validate fields; raise :class:`ValueError` with the field name."""
         if not isinstance(self.user_agent, str) or not self.user_agent:
             raise ValueError("user_agent: must be a non-empty string")
 
@@ -487,22 +366,12 @@ class RequestConfig:
 
 
 def default_config() -> RequestConfig:
-    """Return a fresh :class:`RequestConfig` with default values.
-
-    Returns:
-        RequestConfig
-            A new instance; no shared/global state.
-    """
+    """Return a fresh :class:`RequestConfig` with default values."""
     return RequestConfig()
 
 
 def default_noise_policy() -> NoisePolicy:
-    """Return a fresh :class:`NoisePolicy` with default values.
-
-    Returns:
-        NoisePolicy
-            A new instance; no shared/global state.
-    """
+    """Return a fresh :class:`NoisePolicy` with default values."""
     return NoisePolicy()
 
 
@@ -510,16 +379,9 @@ def default_noise_policy() -> NoisePolicy:
 # Markdown convert whitelist
 # ---------------------------------------------------------------------------
 
-#: Tags that ``markitdown`` (via markdownify) should convert/format.
-#: Tags NOT in this set still have their content preserved as plain text
-#: (markdownify 1.x does **not** strip non-whitelisted content).
-#: Actual noise removal (``<template>``, ``<nav>``, etc.) is the
-#: responsibility of :class:`NoisePolicy` / the Sanitizer.
-#:
-#: ``img`` is deliberately absent: the Sanitizer already removes every image
-#: element (:data:`IMAGE_ELEMENTS`), and whitelisting it here would let the
-#: converter emit ``![alt](src)`` for markup that survived — markdownify
-#: unwraps a non-whitelisted tag instead, which drops the picture whole.
+#: Tags markitdown should format; other tags keep their content as plain text.
+#: ``img`` is deliberately absent — the Sanitizer already drops every picture,
+#: and whitelisting it would let markdownify emit ``![alt](src)``.
 MARKDOWN_CONVERT_TAGS: frozenset[str] = frozenset(
     {
         "h1", "h2", "h3", "h4", "h5", "h6",

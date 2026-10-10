@@ -1,19 +1,4 @@
-"""Use-cases over hh.ru pages: fetch a page, and map failures to ToolError.
-
-This is the layer between the two ends of the pipeline. Above it, ``app.py``
-registers MCP tools and resources and knows nothing about HTTP; below it, the
-:mod:`hh_mcp.fetch` package talks to the network and turns HTML into Markdown
-and knows nothing about MCP. Everything that is *both* hh.ru-specific and
-MCP-facing lives here:
-
-* the concrete URLs (a vacancy, an employer, the filtered vacancy search);
-* the fixed :data:`SEARCH_PARAMS` of that search;
-* the mapping from a fetch exception to the one sentence a caller should read.
-
-The split matters for error handling: an HTTP 404 for a missing vacancy and an
-HTTP 400 for a missing employer are one fact ("there is no such page"), and the
-message is composed here, once, instead of in each tool.
-"""
+"""Use-cases over hh.ru pages: fetch a page and map failures to a ToolError."""
 
 from __future__ import annotations
 
@@ -59,14 +44,10 @@ MAX_CHARS: int = 120_000
 MIN_CONTENT_CHARS: int = 200
 """Minimum body length for a page to count as real content.
 
-A closed or archived vacancy is not a 404: hh.ru 302-redirects it to a regional
-landing/lead page (e.g. ``kolomna.hh.ru/vrsurvey/...``) whose ``<main>`` holds
-only an embedded JSON state dump. The sanitizer strips that and Markdown ends up
-as a lone ``# HeadHunter`` title. Passing it off as the vacancy would be a silent
-lie, so the tool reports a fetch failure instead.
-
-The message states only what was observed — that the page has no content. Why
-it has none is not the server's to guess at.
+A closed vacancy is not a 404: hh.ru redirects it to a regional landing page
+whose Markdown is a lone ``# HeadHunter`` title. Reporting that as the vacancy
+would be a silent lie, so the tool fails instead — stating only that the page
+has no content, not why.
 """
 
 # --- Logging ---------------------------------------------------------------
@@ -99,38 +80,17 @@ SEARCH_PARAMS: tuple[tuple[str, str], ...] = (
     ("hhtmFrom", "vacancy_search_list"),
     ("hhtmFromLabel", "drawer_filter"),
 )
-"""Fixed hh.ru search parameters, in the order the site itself sends them.
+"""Fixed hh.ru search filters, in the order the site itself sends them.
 
-These are the filters of the drawer-filtered vacancy search: salary paid twice
-a month, full employment, at least a year of experience, direct employers
-(``not_from_agency``) ready to sign a labour contract, and any work format
-(remote, on-site, hybrid) across title, company name and description.
-
-They are applied to every :func:`search_vacancy_ids` call and are deliberately
-*not* exposed as tool arguments: an agent that passes them through ``text`` only
-wastes query width. The order and the repeated keys (``experience``,
-``label``, ``work_format``, ``search_field``) are part of the contract — a
-test compares the generated query pair by pair against this tuple.
+Salary twice a month, full employment, a year of experience or more, direct
+employers ready to sign a labour contract, any work format; searched across
+title, company name and description. The order and the repeated keys are part
+of the contract — a test compares the generated query pair by pair.
 """
 
 
 def _search_url(text: str, page: int) -> str:
-    """Build the hh.ru vacancy search URL for *text* on *page*.
-
-    Parameters
-    ----------
-    text:
-        Raw user query, sent as ``text`` with ``quote_plus`` — the search
-        operators of hh.ru (``!``, ``"``, ``~``, ``*``, ``AND``/``OR``/``NOT``)
-        survive percent-encoding unchanged.
-    page:
-        Zero-based page number, appended last.
-
-    Returns
-    -------
-    str
-        Absolute ``https://hh.ru/search/vacancy`` URL.
-    """
+    """Build the hh.ru vacancy search URL for *text* on *page*."""
     q = quote_plus(text.strip(), safe=" ")
     return (
         f"https://hh.ru/search/vacancy?text={q}"
@@ -143,30 +103,7 @@ def _search_url(text: str, page: int) -> str:
 
 
 def _http_status_message(status: int, subject: str | None) -> str:
-    """Say what the status means, in one sentence and no longer.
-
-    The raw ``httpx`` text is unusable: it carries the post-redirect URL (a
-    regional host for a page that does not exist) and a link to the MDN, which
-    makes a missing vacancy look like a broken server.
-
-    400 and 404 share one message on purpose. hh.ru answers an unknown vacancy
-    with 404 and an unknown employer with 400, but both mean the same thing to
-    the caller — there is no such page — so the agent gets one conclusion
-    instead of two codes to interpret.
-
-    Parameters
-    ----------
-    status:
-        Numeric HTTP status.
-    subject:
-        The page, named so the sentence reads as a sentence: ``"Vacancy
-        38185674"``. ``None`` falls back to a generic subject.
-
-    Returns
-    -------
-    str
-        One sentence, no URLs.
-    """
+    """Say what the status means, in one sentence and no longer."""
     what = subject or "The requested page"
     if status in (400, 404):
         return f"{what} does not exist on hh.ru (HTTP {status})."
@@ -182,25 +119,7 @@ def _http_status_message(status: int, subject: str | None) -> str:
 
 
 def tool_error(exc: Exception, *, subject: str | None = None) -> ToolError:
-    """Map a fetch exception to a user-facing :class:`ToolError`.
-
-    Branching order matters: ``FetchTimeoutError`` / ``ResponseTooLargeError``
-    / ``HttpStatusError`` are ``TransportError`` subclasses and are matched
-    before the generic transport branch.
-
-    Parameters
-    ----------
-    exc:
-        Exception raised by the fetch pipeline.
-    subject:
-        What was being fetched, in English, e.g. ``"vacancy 38185674"``. Used
-        by the HTTP-status branch to name the page instead of the host.
-
-    Returns
-    -------
-    ToolError
-        New error with a stable, user-facing message.
-    """
+    """Map a fetch exception to a user-facing :class:`ToolError`."""
     if isinstance(exc, SSRError):
         return ToolError("SSRF guard rejected the URL")
     if isinstance(exc, InvalidURLError):
@@ -223,38 +142,14 @@ def tool_error(exc: Exception, *, subject: str | None = None) -> ToolError:
 
 
 def _markdown_body(md: str) -> str:
-    """Return *md* without heading lines, for a content-length check.
-
-    Parameters
-    ----------
-    md:
-        Markdown as produced by the fetch pipeline.
-
-    Returns
-    -------
-    str
-        Body text with ``#``-heading lines dropped.
-    """
+    """Return *md* without heading lines, for a content-length check."""
     return "\n".join(
         line for line in md.splitlines() if not line.lstrip().startswith("#")
     ).strip()
 
 
 def _page_subject(doc_type: str | None, doc_id: int | None) -> str | None:
-    """Name the page being fetched, for error messages.
-
-    Parameters
-    ----------
-    doc_type:
-        ``"vacancy"`` or ``"employer"``, or ``None`` for a plain URL.
-    doc_id:
-        Numeric hh.ru identifier.
-
-    Returns
-    -------
-    str | None
-        e.g. ``"vacancy 38185674"``, or ``None`` when the page is unknown.
-    """
+    """Name the page being fetched, for error messages (``None`` if unknown)."""
     if doc_type is None or doc_id is None:
         return None
     noun = "Vacancy" if doc_type == "vacancy" else "Employer page"
@@ -267,29 +162,7 @@ def _page_subject(doc_type: str | None, doc_id: int | None) -> str | None:
 def fetch_page_markdown(
     url: str, *, doc_type: str | None = None, doc_id: int | None = None
 ) -> str:
-    """Fetch *url* as Markdown with app-level error mapping.
-
-    Parameters
-    ----------
-    url:
-        Absolute ``https://`` URL of the hh.ru page.
-    doc_type:
-        Optional page type (``"vacancy"`` or ``"employer"``). Used only to
-        name the page in error messages.
-    doc_id:
-        Numeric hh.ru identifier. Used only to name the page in error
-        messages.
-
-    Returns
-    -------
-    str
-        Page main content as Markdown (title-prefixed, truncated).
-
-    Raises
-    ------
-    ToolError
-        On any fetch failure — see :func:`tool_error` for the mapping.
-    """
+    """Fetch *url* as Markdown with app-level error mapping."""
     subject = _page_subject(doc_type, doc_id)
     try:
         md = fetch_as_markdown(url, timeout=TIMEOUT_S, max_chars=MAX_CHARS)
@@ -306,30 +179,7 @@ def fetch_page_markdown(
 
 
 def search_vacancy_ids(text: str, page: int) -> list[int]:
-    """Return the vacancy ids on one page of the filtered hh.ru search.
-
-    The ids live in ``data-qa`` attributes of the raw HTML, so this fetches the
-    page itself (same transport and SSRF guard as :func:`fetch_page_markdown`)
-    instead of going through the Markdown converter.
-
-    Parameters
-    ----------
-    text:
-        Search query, sent to hh.ru as-is (percent-encoded, otherwise
-        unchanged).
-    page:
-        Zero-based page number.
-
-    Returns
-    -------
-    list[int]
-        Vacancy ids in the order hh.ru lists them; empty past the last page.
-
-    Raises
-    ------
-    ToolError
-        On any fetch failure — see :func:`tool_error` for the mapping.
-    """
+    """Return the vacancy ids on one page of the filtered hh.ru search."""
     url = _search_url(text, page)
     try:
         html = fetch_page(url, timeout=TIMEOUT_S).decode("utf-8", errors="replace")

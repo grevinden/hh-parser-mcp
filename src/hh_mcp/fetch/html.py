@@ -1,10 +1,5 @@
-"""HTML sanitizer: noise removal, main-block extraction, title
-extraction, and link resolution.
-
-Stdlib ``html.parser``-based cleaner. Single-pass, no DOM tree, no
-BeautifulSoup dependency.  Malformed HTML is parsed best-effort and
-never raises an exception.
-"""
+"""HTML sanitizer: noise removal, main-block extraction, title extraction, and link
+resolution."""
 
 from __future__ import annotations
 
@@ -30,20 +25,7 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class SanitizedDocument:
-    """Result of a sanitization pass.
-
-    Attributes:
-        html:
-            Cleaned UTF-8 text; links already resolved to absolute when
-            a *base_url* was provided.
-        title:
-            Text content of the first ``<title>`` tag, **or** ``None``
-            if absent.  Stripped of leading/trailing whitespace.
-        removed:
-            Number of top-level noise elements that were removed (grand-
-            children are counted as part of the parent — this is a count
-            of *removal operations*, not individual tags).
-    """
+    """Result of a sanitization pass."""
 
     html: str = ""
     title: str | None = None
@@ -51,11 +33,7 @@ class SanitizedDocument:
 
     @staticmethod
     def empty() -> SanitizedDocument:
-        """Return a safe empty document (no HTML, no title, zero removals).
-
-        Returns:
-            SanitizedDocument
-        """
+        """Return a safe empty document (no HTML, no title, zero removals)."""
         return SanitizedDocument(html="", title=None, removed=0)
 
 
@@ -65,29 +43,8 @@ class SanitizedDocument:
 
 
 class _ReconstructingHtmlParser(HTMLParser):
-    """HTML parser that reconstructs the cleaned document while filtering
-    noise elements and collecting the first ``<title>``.
-
-    ``html.parser`` already treats ``<script>``, ``<style>``, and
-    ``<title>`` as *literal* elements: their raw content is passed to
-    ``handle_data`` as a single chunk rather than being parsed as tags.
-    This simplifies script/style removal and title extraction.
-
-    Suppression is tracked with a *stack* of booleans (``True`` =
-    regular element, ``False`` = noise subtree), so that closing tags of
-    regular elements nested inside noise (e.g. ``<ul>`` inside ``<nav>``)
-    keep the stack consistent and never leak into the output.  A **void**
-    element (``<img>``, ``<input>``, ...) is never pushed — it has no
-    end tag, so a pushed entry would never be popped and would silence
-    the rest of the document.
-
-    When :attr:`NoisePolicy.main_extraction` is enabled (default) the
-    parser additionally runs a three-phase state machine
-    (``pre`` / ``in`` / ``post``) around the first ``<main>`` element:
-    everything before ``<main>`` (header / navigation / cookie banners)
-    and everything after ``</main>`` (footer) is dropped.  A document
-    without ``<main>`` passes through unchanged (lenient).
-    """
+    """HTML parser that reconstructs the cleaned document while filtering noise elements
+    and collecting the first ``<title>``."""
 
     #: Elements whose entire content is treated as raw text by HTMLParser.
     LITERAL_ELEMENTS = frozenset({"script", "style"})
@@ -322,19 +279,7 @@ class _ReconstructingHtmlParser(HTMLParser):
         self._route(text)
 
     def _flush_fact_cell(self) -> None:
-        """Emit (or drop) the buffered ``cell-text-content`` span.
-
-        hh.ru renders the employer sidebar as a value + caption pair per
-        fact ("Москва" / "Город").  The cards holding those cells are
-        removed wholesale (:data:`~hh_mcp.fetch.config.NOISE_DATA_QA`),
-        but a caption can also be rendered *inside* the description widget
-        (the "Сайт" cell) — such an orphan caption would otherwise survive
-        as a dangling word at the end of the Markdown.  Captions listed in
-        :data:`~hh_mcp.fetch.config.ORPHAN_FACT_LABELS` are therefore
-        dropped; anything else (a real value such as "Москва", or free
-        text) is re-emitted with its text content preserved and its
-        original markup normalised to a flat span.
-        """
+        """Emit (or drop) the buffered ``cell-text-content`` span."""
         raw = "".join(self._cell_parts)
         text = " ".join(unescape(raw).split())
         if not text:
@@ -378,11 +323,7 @@ class _ReconstructingHtmlParser(HTMLParser):
 
 
 class Sanitizer:
-    """Stdlib ``html.parser``-based HTML cleaner.
-
-    Lenient by construction: malformed HTML never raises (it is parsed
-    as best-effort; unparseable content is passed through.
-    """
+    """Stdlib ``html.parser``-based HTML cleaner."""
 
     def __init__(self, *, noise: NoisePolicy, logger: logging.Logger) -> None:
         self._noise = noise
@@ -391,31 +332,7 @@ class Sanitizer:
     def sanitize(
         self, html: str, *, base_url: str | None = None
     ) -> SanitizedDocument:
-        """Clean and transform HTML.
-
-        1. When :attr:`NoisePolicy.main_extraction` is enabled, keep only
-           the content of the first ``<main>`` element (a document without
-           ``<main>`` passes through unchanged).
-        2. Remove ``<script>``, ``<style>`` subtrees (always).
-        3. Remove elements matching :attr:`NoisePolicy.is_noise` — this
-           includes every image element
-           (:data:`~hh_mcp.fetch.config.IMAGE_ELEMENTS`), so a picture
-           never reaches the converter and its ``alt`` text never becomes
-           a dangling word.
-        4. Extract text content of the first ``<title>`` tag.
-        5. Resolve relative links when *base_url* is given.
-
-        Args:
-            html:
-                Input HTML (UTF-8 text).
-            base_url:
-                Base URL for relative link resolution.  When ``None``
-                links are left as-is.
-
-        Returns:
-            SanitizedDocument
-                Cleaned document with title and removal metadata.
-        """
+        """Clean and transform HTML."""
         parser = _ReconstructingHtmlParser(self._noise)
         try:
             parser.feed(html)
@@ -459,20 +376,6 @@ def sanitize_document(
     config: RequestConfig,
     logger: logging.Logger,
 ) -> SanitizedDocument:
-    """One-shot sanitization with the noise policy from *config*.
-
-    Args:
-        html:
-            Input HTML.
-        base_url:
-            Base URL for link resolution.
-        config:
-            Request configuration (provides :attr:`RequestConfig.noise`).
-        logger:
-            Logger instance.
-
-    Returns:
-        SanitizedDocument
-    """
+    """One-shot sanitization with the noise policy from *config*."""
     sanitizer = Sanitizer(noise=config.noise, logger=logger)
     return sanitizer.sanitize(html, base_url=base_url)

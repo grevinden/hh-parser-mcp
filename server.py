@@ -1,4 +1,4 @@
-"""hh-mcp server entry-point for the native launcher.
+"""hh-mcp entry point for the native launcher.
 
 Run from the repository root::
 
@@ -6,24 +6,10 @@ Run from the repository root::
     uv run fastmcp dev apps fastmcp.json
 
 The launcher imports this module and picks up :data:`mcp` (the ``entrypoint``
-declared in ``fastmcp.json``). This file is the composition root: it puts the
-source tree on the import path, configures logging for the ``hh_mcp`` namespace
-and attaches the cache layer. Everything else lives in its own layer:
-
-``hh_mcp.app``
-    the MCP surface — tools and resources.
-``hh_mcp.service``
-    the hh.ru use-cases — URLs, fetch orchestration, error wording.
-``hh_mcp.fetch``
-    the network — SSRF guard, HTTP transport, HTML → Markdown.
-``hh_mcp.cache``
-    the response cache — a file-backed store behind the tools.
-
-The cache is a :class:`ResponseCachingMiddleware` with a **file-backed** store
-(``FileTreeStore`` from ``py-key-value-aio``): repeating a tool call with the
-same argument (e.g. the same vacancy id) is served from the cache instead of
-hitting hh.ru again. See :mod:`hh_mcp.cache` for the env switches
-(``HH_MCP_CACHE``, ``HH_MCP_CACHE_DIR``).
+declared in ``fastmcp.json``). This is the composition root: it puts the source
+tree on the import path, configures logging for the ``hh_mcp`` namespace and
+attaches the cache layer. Layers: ``app`` (MCP surface), ``service`` (hh.ru
+use-cases), ``fetch`` (network), ``cache`` (disk response cache).
 """
 
 from __future__ import annotations

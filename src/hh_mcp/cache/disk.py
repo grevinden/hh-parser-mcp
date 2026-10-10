@@ -1,12 +1,4 @@
-"""Disk response cache: the caching layer of hh-mcp.
-
-A tool call with the same arguments is served from a file-backed store instead
-of hitting hh.ru again. The cache is a `ResponseCachingMiddleware` over a
-`FileTreeStore`; this module owns the store, its logging subclass and the
-environment switches, so the entry point (``server.py``) only wires it up.
-
-See :func:`attach`.
-"""
+"""Disk response cache: the caching layer of hh-mcp."""
 
 from __future__ import annotations
 
@@ -38,7 +30,7 @@ __all__ = [
 # --- Configuration ---------------------------------------------------------
 
 CACHE_DIR: Path = Path(
-    os.environ.get("HH_MCP_CACHE_DIR", Path.home() / ".cache" / "hh_mcp")
+    os.environ.get("HH_MCP_CACHE_DIR", Path.home() / ".cache" / "hh-mcp")
 ).expanduser()
 """Directory for the file-backed response cache (override via env)."""
 
@@ -59,20 +51,7 @@ CACHE_OFF_VALUES: frozenset[str] = frozenset({"0", "off", "false", "no"})
 
 
 def _approx_chars(value: Any) -> int:
-    """Return a cheap size estimate for log lines, without serializing.
-
-    Parameters
-    ----------
-    value:
-        Arbitrary nested structure — the cached response is a mapping of
-        content blocks, whose payload can be tens of kilobytes.
-
-    Returns
-    -------
-    int
-        Sum of the string lengths of every leaf, plus mapping keys, in
-        characters (what a log line comparing sizes must use).
-    """
+    """Return a cheap size estimate for log lines, without serializing."""
     if isinstance(value, str):
         return len(value)
     if isinstance(value, Mapping):
@@ -83,40 +62,15 @@ def _approx_chars(value: Any) -> int:
 
 
 class LoggingFileTreeStore(FileTreeStore):
-    """File-backed store that logs every read, miss and write.
-
-    ``ResponseCachingMiddleware`` decides *when* the store is consulted; this
-    subclass only makes those decisions visible, so a log shows whether the
-    disk cache or hh.ru answered. Values are reported by size only — never
-    their content, which is a whole vacancy page.
-    """
+    """File-backed store that logs every read, miss and write."""
 
     def __init__(self, **kwargs: Any) -> None:
-        """Build the store and remember where to log.
-
-        Parameters
-        ----------
-        **kwargs:
-            Forwarded verbatim to :class:`FileTreeStore`.
-        """
+        """Forward keyword arguments to :class:`FileTreeStore`."""
         super().__init__(**kwargs)
         self._logger = logger
 
     async def get(self, key: str, **kwargs: Any) -> dict[str, Any] | None:
-        """Read one entry and log whether it was there.
-
-        Parameters
-        ----------
-        key:
-            Store key, as produced by the middleware.
-        **kwargs:
-            Forwarded verbatim to the base store.
-
-        Returns
-        -------
-        dict[str, Any] | None
-            The stored value, or ``None`` when the key is absent or expired.
-        """
+        """Read one entry and log whether it was there."""
         value = await super().get(key, **kwargs)
         if value is None:
             self._logger.info("disk cache miss: key=%s", key)
@@ -129,17 +83,7 @@ class LoggingFileTreeStore(FileTreeStore):
     async def put(
         self, key: str, value: Mapping[str, Any], **kwargs: Any
     ) -> None:
-        """Write one entry and log the write.
-
-        Parameters
-        ----------
-        key:
-            Store key, as produced by the middleware.
-        value:
-            Response to store.
-        **kwargs:
-            Forwarded verbatim to the base store.
-        """
+        """Write one entry and log the write."""
         await super().put(key, value, **kwargs)
         self._logger.info(
             "disk cache write: key=%s chars=%d ttl=%s",
@@ -153,15 +97,7 @@ class LoggingFileTreeStore(FileTreeStore):
 
 
 def cache_enabled() -> bool:
-    """Return ``True`` unless ``HH_MCP_CACHE`` says otherwise.
-
-    Returns
-    -------
-    bool
-        ``False`` when ``HH_MCP_CACHE`` is set to one of
-        :data:`CACHE_OFF_VALUES` (case-insensitive), ``True`` otherwise
-        (including when the variable is unset).
-    """
+    """Return ``False`` when ``HH_MCP_CACHE`` turns the cache off."""
     raw = os.environ.get("HH_MCP_CACHE")
     if raw is None:
         return True
@@ -169,18 +105,7 @@ def cache_enabled() -> bool:
 
 
 def attach(mcp: FastMCP) -> None:
-    """Attach the disk response cache to *mcp* when it is enabled.
-
-    Parameters
-    ----------
-    mcp:
-        The server to add the middleware to. With ``HH_MCP_CACHE`` off, nothing
-        is attached and no cache directory is created.
-
-    Returns
-    -------
-    None
-    """
+    """Attach the disk response cache to *mcp* when it is enabled."""
     if not cache_enabled():
         logger.info(
             "response cache disabled via HH_MCP_CACHE=%s",
@@ -188,8 +113,7 @@ def attach(mcp: FastMCP) -> None:
         )
         return
 
-    # The sanitization strategies below inspect the directory (max filename
-    # length), so it must exist before they are constructed.
+    # The sanitization strategies inspect the directory, so it must exist first.
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     store = LoggingFileTreeStore(

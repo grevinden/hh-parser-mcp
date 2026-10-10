@@ -1,16 +1,4 @@
-"""Relative-to-absolute link resolution and tracking-param cleanup.
-
-Pure functions using ``urllib.parse``; no I/O, no DOM tree.
-Idempotent for already-absolute hrefs.
-
-Uses a single-pass ``html.parser`` to locate URL attributes and then
-rewrites only the matching attribute values in the raw HTML string
-(byte-level replacement preserves character references and entities).
-
-:func:`clean_query_params` drops click-tracking / analytics query
-parameters (``hhtmFrom``, ``backurl``, ``utm_*``, ...) from raw
-entity-escaped attribute values.
-"""
+"""Relative-to-absolute link resolution and tracking-param cleanup."""
 
 from __future__ import annotations
 
@@ -42,12 +30,7 @@ _ATTR_RE = re.compile(
 
 
 def _is_tracking_param(name: str) -> bool:
-    """Return ``True`` if *name* is a click-tracking query parameter.
-
-    Exact matches against :data:`TRACKING_QUERY_KEYS` and prefix
-    matches against :data:`TRACKING_QUERY_KEY_PREFIXES`, compared
-    case-insensitively.
-    """
+    """Return ``True`` if *name* is a click-tracking query parameter."""
     folded = name.casefold()
     if folded in TRACKING_QUERY_KEYS:
         return True
@@ -55,26 +38,7 @@ def _is_tracking_param(name: str) -> bool:
 
 
 def clean_query_params(url: str) -> str:
-    """Drop click-tracking query parameters from *url*.
-
-    *url* is the **raw (entity-escaped)** attribute value as it
-    appears in the source HTML.  The function unescapes the value,
-    drops parameters whose names are in :data:`TRACKING_QUERY_KEYS`
-    or start with one of :data:`TRACKING_QUERY_KEY_PREFIXES`
-    (``utm_*``) case-insensitively, then re-escapes the result so it
-    is safe to embed in a double-quoted attribute.
-
-    Idempotent: URLs without a query string, or without any tracking
-    parameter, are returned verbatim (the original raw string).
-
-    Args:
-        url:
-            Raw URL attribute value (possibly entity-escaped).
-
-    Returns:
-        str
-            The cleaned value, safe to embed in an HTML attribute.
-    """
+    """Drop click-tracking query parameters from *url*."""
     if "?" not in url:
         return url
     unescaped = unescape(url)
@@ -91,31 +55,8 @@ def clean_query_params(url: str) -> str:
 
 
 def resolve_relative_links(html: str, base_url: str | None) -> str:
-    """Rewrite ``a[href]`` / ``img[src]`` / ``source[src]`` / ``link[href]``
-    attributes against *base_url* using ``urllib.parse.urljoin``.
-
-    Idempotent: already-absolute URLs (including protocol-relative ``//``,
-    scheme-full URLs like ``https://...``) pass through unchanged.
-
-    The function is:
-    - **Idempotent** — calling it twice with the same *base_url* produces
-      the same output.
-    - **Lenient** — malformed HTML is parsed best-effort; no exceptions
-      on markup errors.
-    - **Preserving** — character references and entities inside attribute
-      values are left intact (the replacement operates on the raw string).
-
-    Args:
-        html:
-            Input HTML string (UTF-8).
-        base_url:
-            Base URL for resolution.  When ``None`` or empty the document
-            is returned unchanged.
-
-    Returns:
-        str
-            The document with relative links resolved to absolute.
-    """
+    """Rewrite ``a[href]`` / ``img[src]`` / ``source[src]`` / ``link[href]`` attributes
+    against *base_url* using ``urllib.parse.urljoin``."""
     if not base_url:
         return html
 

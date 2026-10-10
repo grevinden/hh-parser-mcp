@@ -1,26 +1,4 @@
-"""Employer-card enrichment and internal-link stripping (pure functions).
-
-This module implements the post-conversion Markdown pipeline for hh.ru
-vacancy pages (spec: "employer card enrichment"):
-
-1. :func:`extract_employer_ref` — locate the employer reference inside a
-   vacancy Markdown card (a ``[Name](https://<hh>/employer/<id>)`` link or
-   a bare employer URL).
-2. :func:`clean_employer_markdown` — reduce a fetched employer page to a
-   compact card (company name, description, metadata; SEO title, images
-   and the job-list section are dropped).
-3. :func:`embed_employer_card` — splice the cleaned card into the vacancy
-   Markdown under an ``## About the employer: <name>`` heading, replacing
-   the original employer link.
-4. :func:`remove_internal_links` — strip every link whose host is hh.ru
-   (or a job-site subdomain); external links and third-party sites are
-   preserved.  Images are gone long before this stage (the Sanitizer drops
-   the image elements, :func:`~hh_mcp.fetch.converter.normalize_markdown`
-   strips the remaining Markdown picture syntax).
-
-All functions are pure and side-effect free; network I/O stays in the
-orchestrator (DIP).
-"""
+"""Employer-card enrichment and internal-link stripping (pure functions)."""
 
 from __future__ import annotations
 
@@ -78,11 +56,7 @@ _SQUEEZE_RE = re.compile(r"\n{3,}")
 
 
 def _host_is_internal(host: str) -> bool:
-    """Return ``True`` when *host* belongs to an internal hh.ru domain.
-
-    ``hh.ru`` itself and any subdomain (``kolomna.hh.ru``) are internal.
-    ``hhcdn.ru`` and third-party hosts are NOT.
-    """
+    """Return ``True`` when *host* belongs to an internal hh.ru domain."""
     host = host.strip().lower()
     return any(host == d or host.endswith("." + d) for d in INTERNAL_ROOT_DOMAINS)
 
@@ -99,12 +73,7 @@ def _registered_host(url: str) -> tuple[str, str]:
 
 
 def _url_is_internal(url: str) -> bool:
-    """Return ``True`` when *url* points at an internal hh.ru resource.
-
-    Internal means: the host is ``hh.ru`` / a subdomain of it, or the
-    registered host is a cdn/job-site host (`*hh.ru`) with a job path
-    (``/vacancy/``, ``/employer/``, ``/company/``).
-    """
+    """Return ``True`` when *url* points at an internal hh.ru resource."""
     if not netloc_is_known(url):
         return False
     netloc, path = _registered_host(url)
@@ -132,33 +101,7 @@ def _netloc_is_known(url: str) -> bool:
 
 
 def extract_employer_ref(markdown: str) -> tuple[str, str] | None:
-    """Locate the employer reference in a vacancy Markdown card.
-
-    Two shapes are supported:
-
-    - A Markdown link ``[Name](https://<hh-host>/employer/<id>)`` — the
-      most common form on hh.ru vacancy pages.
-    - A bare ``https://<hh-host>/employer/<id>`` URL with no surrounding
-      Markdown link (fallback for converter variants).
-
-    Only *hh.ru* references are recognized: a Markdown link or bare URL
-    whose host is not hh.ru (e.g. ``https://example.com/employer/123``)
-    is skipped.  The first internal match wins.  The returned URL is the
-    *employer page URL* exactly as it appears (query/fragment included,
-    not rewritten).
-
-    Args:
-        markdown:
-            Vacancy Markdown text (already normalized, with an optional
-            ``# <title>`` prefix line).
-
-    Returns:
-        tuple[str, str] | None
-            ``(employer_url, display_name)``.  For a Markdown link,
-            *display_name* is the link text (``Name``).  For a bare URL,
-            *display_name* is the employer id (e.g. ``"11620617"``).
-            ``None`` when no employer reference is present.
-    """
+    """Locate the employer reference in a vacancy Markdown card."""
     if not markdown:
         return None
 
@@ -183,12 +126,7 @@ def _is_employer_url(url: str) -> bool:
 
 
 def _employer_id_from_url(url: str) -> str | None:
-    """Return the numeric employer id from an employer-page URL.
-
-    The path must be exactly ``/employer/<id>`` (a trailing ``/`` is
-    tolerated; ``?``/``#`` live in the query/fragment, outside the path):
-    ``/employer/12345/x`` is *not* an employer-page URL.
-    """
+    """Return the numeric employer id from an employer-page URL."""
     _, path = _registered_host(url)
     m = re.match(r"^/employer/(\d+)/?$", path)
     return m.group(1) if m else None
@@ -200,22 +138,7 @@ def _employer_id_from_url(url: str) -> str | None:
 
 
 def extract_company_name(markdown: str) -> str | None:
-    """Return the company name from an employer-page Markdown.
-
-    The company name is the first H1 heading that is *not* the page's
-    SEO title (``# Работа в компании ...``).  On a full hh.ru employer
-    page that is the second H1 (the registered company name,
-    ``# АО ...``); shorter layouts may have a single non-SEO H1.
-
-    Args:
-        markdown:
-            Employer-page Markdown (title-prefixed output of
-            ``fetch_as_markdown``).
-
-    Returns:
-        str | None
-            The company name (H1 text, stripped) or ``None``.
-    """
+    """Return the company name from an employer-page Markdown."""
     if not markdown:
         return None
     for line in markdown.splitlines():
@@ -234,40 +157,7 @@ def _is_seo_title(text: str) -> bool:
 
 
 def clean_employer_markdown(markdown: str, *, max_chars: int = EMPLOYER_MAX_CHARS) -> str:
-    """Reduce a fetched employer-page Markdown to a compact card.
-
-    Transformation steps (in order):
-
-    1. Drop **every** H1: the page's SEO title (``# Работа в компании
-       ...актуальные вакансии на ...``) and the company-name H1 (the
-       orchestrator re-emits the name as the
-       ``## About the employer: <name>`` heading).  H1s are dropped
-       outright and never trigger the job-list cut — the SEO title
-       itself contains "вакансии".
-    2. Cut the job-list section: a *non-H1* heading whose text matches
-       ``_VACANCIES_HEADING_MARKERS`` starts the employer page's own
-       vacancies block — that heading and everything below is dropped.
-    3. Demote every remaining heading by 3 levels (H2 -> H5, H3 -> H6,
-       capped at H6) so the card nests under the vacancy card.
-    4. Remove every Markdown image (``![alt](src)``, whole-line or inline).
-    5. Compress 3+ consecutive newlines into a single blank line and
-       strip edges.
-    6. Truncate at *max_chars* with a ``...`` tail.
-
-    The result is a self-contained card body (no H1).
-
-    Args:
-        markdown:
-            Employer-page Markdown.
-        max_chars:
-            Maximum characters of the returned card (default
-            ``EMPLOYER_MAX_CHARS`` = 2 500).
-
-    Returns:
-        str
-            Cleaned card body (may be empty when there is no usable
-            content).
-    """
+    """Reduce a fetched employer-page Markdown to a compact card."""
     if not markdown:
         return ""
 
@@ -279,19 +169,15 @@ def clean_employer_markdown(markdown: str, *, max_chars: int = EMPLOYER_MAX_CHAR
         if hm:
             level = len(hm.group("hashes"))
             if level == 1:
-                # Drop every H1 (the SEO title and the company-name H1;
-                # the caller re-emits the name as the card heading).
-                # H1s must NOT trigger the job-list cut: the page's SEO
-                # title itself contains "вакансии" (…актуальные вакансии
-                # на …) and would otherwise truncate the whole card.
+                # Drop every H1 (SEO title, company name). Never cut here: the
+                # SEO title contains "вакансии" and would truncate the card.
                 continue
             if _is_vacancies_heading(hm.group("text")):
                 break  # the job-list section: cut everything below
             out.append("#" * min(level + 3, 6) + " " + hm.group("text").strip())
             continue
         if _IMAGE_RE.search(stripped):
-            # Drop Markdown images (whole-line or inline); any text left
-            # on the line is kept.
+            # Drop images; any text left on the line is kept.
             line = _IMAGE_RE.sub("", line)
             if not line.strip():
                 continue
@@ -299,8 +185,7 @@ def clean_employer_markdown(markdown: str, *, max_chars: int = EMPLOYER_MAX_CHAR
 
     card = _SQUEEZE_RE.sub("\n\n", "\n".join(out)).strip()
     if len(card) > max_chars:
-        # Keep the whole result (body + the 4-char ``\n...`` suffix) within
-        # the cap.
+        # Keep the body plus the 4-char ``\n...`` suffix within the cap.
         card = card[: max(0, max_chars - 4)].rstrip() + "\n..."
     return card
 
@@ -322,43 +207,14 @@ def embed_employer_card(
     name: str,
     card_body: str,
 ) -> str:
-    """Embed a cleaned employer card into a vacancy Markdown card.
-
-    The employer link is replaced by the plain company *name*, and the
-    cleaned *card_body* is appended as a new section at the end of the
-    card under an H2 heading:
-
-    .. code-block:: markdown
-
-        ## About the employer: <name>
-
-        <card_body lines>
-
-    This keeps the vacancy layout intact (the name sits where the link
-    was) and appends the description at the end of the card.
-
-    Args:
-        vacancy_md:
-            Vacancy Markdown text (employer link present).
-        name:
-            Company name (used both as the link replacement and in the
-            heading).
-        card_body:
-            Cleaned card body (no H1; already truncated).
-
-    Returns:
-        str
-            The updated Markdown.
-    """
+    """Embed a cleaned employer card into a vacancy Markdown card."""
     if not vacancy_md:
         return ""
     if not name:
         name = "employer"
 
-    # Replace the employer link with the plain company *name* (preserve the
-    # trailing text on the same line, if any).  Only *internal* (hh.ru)
-    # employer links are replaced; external ``/employer/`` paths are
-    # untouched.
+    # Replace only *internal* (hh.ru) employer links with the plain name,
+    # keeping any trailing text on the line.
     def _repl(m: re.Match) -> str:
         if not _is_employer_url(m.group("url")):
             return m.group(0)
@@ -381,42 +237,12 @@ def embed_employer_card(
 
 
 def remove_internal_links(markdown: str) -> str:
-    """Remove every internal (hh.ru) link from *markdown*.
-
-    Three forms are handled:
-
-    - **Markdown links** ``[text](https://...hh.ru/...)`` → the visible
-      *text* is kept, the URL is dropped (so a vacancy-list entry such as
-      ``[Менеджер по ...](https://kolomna.hh.ru/vacancy/138141302)``
-      becomes ``Менеджер по ...``).  External links are left untouched.
-    - **Markdown images** ``![](https://...hh.ru/...)`` whose source is
-      internal → the whole image is dropped.  External (e.g. ``hhcdn.ru``
-      CDN) images are left alone — this function filters *links*; images
-      never reach it in the fetch pipeline (they are removed in the
-      Sanitizer and by
-      :func:`~hh_mcp.fetch.converter.normalize_markdown`).
-    - **Bare / autolink URLs** (``https://...hh.ru/...`` and
-      ``<https://...hh.ru/...>``) → dropped entirely; external bare URLs
-      are kept.
-
-    The function is pure and idempotent.
-
-    Args:
-        markdown:
-            Markdown text.
-
-    Returns:
-        str
-            Markdown with every internal link removed.
-    """
+    """Remove every internal (hh.ru) link from *markdown*."""
     if not markdown:
         return ""
 
-    # 1. Markdown images with an internal source: drop the whole image.
-    # This pass must run BEFORE the link pass: otherwise an internal
-    # image ``![alt](https://...hh.ru/...)`` would be half-processed by
-    # the link pattern into a ``!alt`` artifact the image pattern no
-    # longer matches.
+    # 1. Internal images: drop the whole image. Must run BEFORE the link pass,
+    # which would turn one into a ``!alt`` artifact the image pattern misses.
     def _img_repl(m: re.Match) -> str:
         src = m.group("src")
         if _url_is_internal(src):

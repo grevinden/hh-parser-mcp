@@ -1,0 +1,12 @@
+# cache/ — дисковый кеш ответов
+
+Один уровень: ResponseCachingMiddleware над FileTreeStore (сериализация на диск,
+без Redis). Кешируются только успешные vacancy/company — search исключён, у него
+выдача меняется от страницы к странице. TTL 1 час; провалы не кешируются.
+
+Каталог по умолчанию `~/.cache/hh-mcp`, переопределяется HH_MCP_CACHE_DIR,
+HH_MCP_CACHE=0 (off/false/no) отключает middleware совсем — тогда каталог не
+создаётся.
+
+Каждое решение видно в логе (hh_mcp.cache): disk cache hit/miss/write — ключ и
+размер, но никогда не текст страницы.

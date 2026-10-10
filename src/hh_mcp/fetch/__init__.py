@@ -1,28 +1,4 @@
-"""fetch — HTTP(S) page fetching and HTML-to-Markdown conversion.
-
-Public API (back-compat stable):
-- :func:`fetch_as_markdown` — fetch URL → Markdown (title prefix,
-  truncation, timeout clamp)
-- :func:`fetch_page` — fetch URL → raw bytes (4 MiB cap, 10 redirects,
-  http2, ``raise_for_status``)
-- :func:`validate_url` — SSRF guard (raises :class:`SSRError`)
-- :func:`html_to_markdown` — offline HTML→Markdown (new)
-
-New classes exposed:
-- :class:`FetchService` — fully-injectable orchestrator
-- :class:`RequestConfig`, :class:`NoisePolicy` — immutable configuration
-
-Employer-card enrichment (pure post-conversion transforms, also exposed
-on the package):
-- :func:`extract_employer_ref` — locate the employer reference in a
-  vacancy card
-- :func:`extract_company_name` — read the company name from an
-  employer page
-- :func:`clean_employer_markdown` — reduce an employer page to a
-  compact card
-- :func:`embed_employer_card` — splice the card into the vacancy card
-- :func:`remove_internal_links` — strip internal hh.ru links
-"""
+"""fetch — HTTP(S) page fetching and HTML-to-Markdown conversion."""
 
 from __future__ import annotations
 

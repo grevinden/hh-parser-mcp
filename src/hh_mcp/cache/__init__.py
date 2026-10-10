@@ -1,9 +1,4 @@
-"""Cache layer of hh-mcp.
-
-Today this is a single tier — a file-backed response cache. See
-:mod:`hh_mcp.cache.disk` for the implementation and :func:`attach` for wiring
-it onto the server.
-"""
+"""Cache layer of hh-mcp: a single tier — a file-backed response cache."""
 
 import hh_mcp
 

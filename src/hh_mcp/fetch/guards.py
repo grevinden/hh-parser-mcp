@@ -1,15 +1,4 @@
-"""SSRF guard: URL validation.
-
-Stateless; parses with ``httpx2.URL`` (already a project dependency).
-Rejection rules (back-compat: same 5 rules and same message format as the
-old module):
-
-1. non-``http(s)`` scheme
-2. userinfo (username or password) in the URL
-3. empty host
-4. host is ``localhost`` or ends with ``.localhost``
-5. host ends with ``.local``
-"""
+"""SSRF guard: URL validation."""
 
 from __future__ import annotations
 
@@ -32,23 +21,7 @@ class UrlGuard:
     """SSRF guard. Stateless; constructed with no args."""
 
     def validate(self, url: str) -> str:
-        """Return a normalized absolute http(s) URL.
-
-        Args:
-            url:
-                Candidate URL string.
-
-        Returns:
-            str
-                The URL as parsed by :class:`httpx2.URL` (str form).
-
-        Raises:
-            InvalidURLError:
-                Not a str, empty, absent scheme, or unparseable.
-            SSRError:
-                Non-http(s) scheme, userinfo in URL, empty host, host ends
-                with ``localhost`` / ``.localhost`` / ``.local``.
-        """
+        """Return a normalized absolute http(s) URL."""
         if not isinstance(url, str) or not url:
             raise InvalidURLError("url must be a non-empty string")
 
@@ -83,25 +56,10 @@ class UrlGuard:
 
 
 # ---------------------------------------------------------------------------
-# Back-compat shim
+# Convenience
 # ---------------------------------------------------------------------------
 
 
 def validate_url(url: str) -> None:
-    """Validate that *url* targets a public, reachable address.
-
-    Blocks non-http(s) schemes, userinfo in the URL, empty hosts, and
-    ``localhost`` / ``.localhost`` / ``.local`` hostnames.
-
-    Args:
-        url:
-            Candidate URL string.
-
-    Raises:
-        SSRError:
-            On any violation (back-compat behavior).
-        InvalidURLError:
-            On non-string input (new; the old code raised ``ValueError``
-            for this case anyway via ``httpx2.URL``).
-    """
+    """Validate *url* with :class:`UrlGuard`, discarding the normalized form."""
     UrlGuard().validate(url)

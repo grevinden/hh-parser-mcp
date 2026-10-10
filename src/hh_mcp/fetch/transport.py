@@ -1,12 +1,4 @@
-"""HTTP transport.
-
-The only module that owns the ``httpx2`` import (DIP: the orchestrator
-depends on the :class:`FetchTransport` Protocol, never on ``httpx2``).
-
-:class:`HttpxTransport` creates a per-request client (no pool reuse across
-calls — same trade-off as the old module; pooling would require a
-long-lived handle / global state).
-"""
+"""HTTP transport."""
 
 from __future__ import annotations
 
@@ -44,29 +36,7 @@ class FetchTransport(Protocol):
     """One-shot fetch of a URL to raw bytes (ISP: narrow interface)."""
 
     def fetch(self, url: str, *, config: RequestConfig) -> bytes:
-        """Fetch *url* and return the raw response body.
-
-        Args:
-            url:
-                A validated absolute URL.
-            config:
-                Transport configuration to use for this call.
-
-        Returns:
-            bytes
-                Raw response body.
-
-        Raises:
-            TransportError:
-                On network/HTTP failure (``__cause__`` is the original
-                ``httpx2`` exception). A 4xx/5xx response raises the
-                :class:`~hh_mcp.fetch.errors.HttpStatusError` subclass, which
-                also carries ``status_code`` and ``url``.
-            FetchTimeoutError:
-                On timeout.
-            ResponseTooLargeError:
-                If the body exceeds ``config.max_body_bytes``.
-        """
+        """Fetch *url* and return the raw response body."""
         ...
 
 
@@ -76,11 +46,7 @@ class FetchTransport(Protocol):
 
 
 class HttpxTransport:
-    """httpx2-based default transport.
-
-    No pool reuse across calls (per-request Client); all parameters come
-    from :class:`RequestConfig`.
-    """
+    """httpx2-based default transport."""
 
     def __init__(
         self,
@@ -89,35 +55,13 @@ class HttpxTransport:
         logger: logging.Logger,
         client_factory: Callable[..., httpx.Client] | None = None,
     ) -> None:
-        """Initialize the transport.
-
-        Args:
-            config:
-                Default configuration used when :meth:`fetch` is called
-                without an explicit *config*.
-            logger:
-                Logger instance (sub-child ``transport`` is used).
-            client_factory:
-                Optional callable used to build the client (DI hook for
-                tests: it may return a client bound to
-                ``httpx2.MockTransport``). Called with the same keyword
-                arguments as :meth:`_build_client` defaults.
-        """
+        """Initialize the transport."""
         self._config = config
         self._logger = logger.getChild("transport")
         self._client_factory = client_factory
 
     def _build_client(self, config: RequestConfig) -> httpx.Client:
-        """Build a per-request client from *config*.
-
-        Args:
-            config:
-                Configuration for the client pool/timeout/limits.
-
-        Returns:
-            httpx.Client
-                A new client, not yet used.
-        """
+        """Build a per-request client from *config*."""
         kwargs: dict[str, object] = {
             "http2": True,
             "follow_redirects": config.max_redirects > 0,
@@ -135,34 +79,7 @@ class HttpxTransport:
         return httpx.Client(**kwargs)  # type: ignore[arg-type]
 
     def fetch(self, url: str, *, config: RequestConfig | None = None) -> bytes:
-        """Fetch *url* and return the raw response body.
-
-        Args:
-            url:
-                A validated absolute URL.
-            config:
-                Optional per-call configuration override; defaults to the
-                transport's configuration.
-
-        Returns:
-            bytes
-                Raw response body.
-
-        Raises:
-            FetchTimeoutError:
-                On any ``httpx2.TimeoutException``.
-            ResponseTooLargeError:
-                If the body exceeds ``config.max_body_bytes``.
-            UnsupportedContentTypeError:
-                If the strict content-type check is enabled (off by
-                default) and the response Content-Type is not HTML.
-            HttpStatusError:
-                On a 4xx/5xx response. Carries ``status_code`` and ``url``;
-                ``__cause__`` is the original ``httpx`` exception.
-            TransportError:
-                On any other ``httpx2`` error (transport errors, protocol
-                errors); ``__cause__`` is the original exception.
-        """
+        """Fetch *url* and return the raw response body."""
         cfg = config or self._config
         host = str(httpx.URL(url).host)
         started = time.perf_counter()
@@ -227,31 +144,12 @@ class HttpxTransport:
 def default_transport(
     config: RequestConfig, logger: logging.Logger
 ) -> FetchTransport:
-    """Create the default :class:`HttpxTransport`.
-
-    Args:
-        config:
-            Default configuration for the transport.
-        logger:
-            Logger instance.
-
-    Returns:
-        FetchTransport
-        A new transport instance (no shared state).
-    """
+    """Create the default :class:`HttpxTransport`."""
     return HttpxTransport(config=config, logger=logger)
 
 
 def create_mock_transport(
     handler: Callable[[httpx.Request], httpx.Response]
 ) -> httpx.MockTransport:
-    """Create an ``httpx2.MockTransport`` for tests.
-
-    Args:
-        handler:
-            Request handler (sync).
-
-    Returns:
-        httpx.MockTransport
-    """
+    """Create an ``httpx2.MockTransport`` for tests."""
     return httpx.MockTransport(handler)
