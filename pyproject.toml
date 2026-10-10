@@ -3,9 +3,9 @@ name = "hh-mcp"
 version = "0.4.0"
 requires-python = ">=3.14"
 dependencies = [
-    "fastmcp>=4.0.11",
-    "httpx2[http2]>=0.0.1",
-    "markitdown>=0.1",
+    "fastmcp>=4.1.0",
+    "httpx2[http2]>=2.13.1",
+    "markitdown>=0.1.8",
 ]
 
 [dependency-groups]
