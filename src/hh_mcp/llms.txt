@@ -15,3 +15,7 @@ cache/ — дисковый кеш; version.py — версия сборки; se
 - version.py читает `[project].version` из pyproject.toml, а не метаданные
   дистрибутива: проект не собирается пакетом (`[tool.uv] package = false`).
 - `SEARCH_GUIDE_MD` читается из `search_guide.md` рядом — текст правится без кода.
+- Ответ не дублируется: vacancy/company кладут страницу в `content`, search —
+  сводку в `content`, а список id — в `structured_content.result`. Аргументы
+  валидирует схема (`PositiveInt`/`NonNegativeInt`/`StringConstraints`), поэтому
+  тело тулзы доходит только до валидных вызовов.

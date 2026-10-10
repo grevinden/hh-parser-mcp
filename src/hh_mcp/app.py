@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from typing import Annotated
 
 from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError
 from fastmcp.tools import ToolResult
+from mcp.types import TextContent
+from pydantic import NonNegativeInt, PositiveInt, StringConstraints
 
 from hh_mcp.search_guide import SEARCH_GUIDE_MD, SEARCH_GUIDE_URI
 from hh_mcp.service import fetch_page_markdown, search_vacancy_ids
@@ -26,14 +28,19 @@ __all__ = [
 mcp: FastMCP = FastMCP("hh-mcp", version=BUILD_ID)
 
 
+# --- Argument types --------------------------------------------------------
+
+
+NonBlankStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+"""A string that must carry text: padding is stripped, a blank one is rejected."""
+
+
 # --- Tools -----------------------------------------------------------------
 
 
 @mcp.tool
-def vacancy(id: int) -> ToolResult:
+def vacancy(id: PositiveInt) -> ToolResult:
     """Fetch an hh.ru vacancy page as Markdown."""
-    if id <= 0:
-        raise ToolError(f"Invalid ID: {id}")
     md = fetch_page_markdown(
         f"https://hh.ru/vacancy/{id}", doc_type="vacancy", doc_id=id
     )
@@ -42,10 +49,8 @@ def vacancy(id: int) -> ToolResult:
 
 
 @mcp.tool
-def company(id: int) -> ToolResult:
+def company(id: PositiveInt) -> ToolResult:
     """Fetch an hh.ru company (employer) page as Markdown."""
-    if id <= 0:
-        raise ToolError(f"Invalid ID: {id}")
     md = fetch_page_markdown(
         f"https://hh.ru/employer/{id}", doc_type="employer", doc_id=id
     )
@@ -54,32 +59,22 @@ def company(id: int) -> ToolResult:
 
 
 @mcp.tool
-def search(text: str, page: int = 0) -> ToolResult:
-    """Search hh.ru vacancies and return a flat list of vacancy IDs.
+def search(
+    text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)],
+    page: NonNegativeInt = 0,
+) -> ToolResult:
+    """Search hh.ru vacancies with this server's fixed filters.
 
-    Read ``hh-mcp://search-guide`` first: it documents the query operators and
-    the filters this server always applies.
+    Returns the ids of one result page. The query language and the filters are
+    documented in the ``hh-mcp://search-guide`` resource — read it before
+    building ``text``.
     """
-    if not isinstance(text, str) or not text.strip():
-        raise ToolError("Invalid text: non-empty string required")
-    if not isinstance(page, int) or page < 0:
-        raise ToolError(f"Invalid page: {page}")
-
     ids = search_vacancy_ids(text, page)
-
-    if ids:
-        joined = ", ".join(str(i) for i in ids)
-        summary = f"Найдено {len(ids)} вакансий (страница {page}): {joined}"
-    else:
-        summary = (
-            f"Ничего не найдено по запросу «{text.strip()}» (страница {page}). "
-            "Поиск ограничен фильтрами: зарплата 2 раза в месяц, полная "
-            "занятость, опыт от 1 года, без агентств и ГПХ, формат работы — "
-            "удалённо, в офисе или гибрид."
-        )
-
-    return ToolResult(content=summary)
-
+    summary = f"Found: {len(ids)}" if ids else "No results found."
+    return ToolResult(
+        content=[TextContent(type="text", text=summary)],
+        structured_content={"result": ids},
+    )
 
 # --- Resources -------------------------------------------------------------
 

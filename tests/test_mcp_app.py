@@ -1,8 +1,8 @@
 """Tests for the hh-mcp tools (vacancy, company, search, version).
 
-Covers error mapping, argument validation, and the response contract: a tool
-returns a ``ToolResult`` with ``content`` only, so a payload reaches the client
-exactly once — no Prefab view, no ``structuredContent.result`` mirror.
+Covers error mapping, argument validation, and the response contract: page
+tools return Markdown in ``content``; ``search`` returns a short summary in
+``content`` plus the vacancy ids in ``structuredContent.result``.
 
 Uses the in-memory ``FastMCPTransport`` client (no network, no HTTP server).
 ``fetch_as_markdown`` is always monkeypatched — the real fetch is covered
@@ -205,22 +205,24 @@ class TestHttpStatusErrors:
 
 
 class TestToolValidation:
-    """ID validation happens before any fetch call."""
+    """Argument constraints live in the signature and are enforced by the
+    schema, before any fetch call."""
 
-    def test_vacancy_rejects_zero(self, monkeypatch):
+    @pytest.mark.parametrize(
+        ("tool", "args"),
+        [
+            ("vacancy", {"id": 0}),
+            ("vacancy", {"id": -1}),
+            ("company", {"id": 0}),
+            ("company", {"id": -1}),
+            ("vacancy", {"id": "abc"}),
+            ("vacancy", {}),
+        ],
+    )
+    def test_bad_id_is_rejected(self, monkeypatch, tool, args):
         monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch())
-        with pytest.raises(ToolError, match="Invalid ID: 0"):
-            vacancy(0)
-
-    def test_vacancy_rejects_negative(self, monkeypatch):
-        monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch())
-        with pytest.raises(ToolError, match="Invalid ID: -1"):
-            vacancy(-1)
-
-    def test_company_rejects_zero(self, monkeypatch):
-        monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch())
-        with pytest.raises(ToolError, match="Invalid ID: 0"):
-            company(0)
+        result = _call(tool, args)
+        assert result.is_error is True
 
     def test_ok_calls_fetch_with_url(self, monkeypatch):
         seen: dict[str, str] = {}
@@ -273,13 +275,13 @@ class TestMcpTools:
         monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch())
         result = _call("vacancy", {"id": 0})
         assert result.is_error is True
-        assert "Invalid ID: 0" in result.content[0].text
+        assert "id" in result.content[0].text.lower()
 
     def test_invalid_id_negative(self, monkeypatch):
         monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch())
         result = _call("company", {"id": -1})
         assert result.is_error is True
-        assert "Invalid ID: -1" in result.content[0].text
+        assert "id" in result.content[0].text.lower()
 
     def test_ssre(self, monkeypatch):
         monkeypatch.setattr(service, "fetch_as_markdown", _raising_fetch(SSRError()))
@@ -528,7 +530,7 @@ class TestEmptyPageGuard:
 
 
 class TestSearchTool:
-    """search() returns a flat list of vacancy IDs."""
+    """search() returns a one-line summary plus the vacancy ids, once."""
 
     SERP_HTML = (
         b'<div data-qa="serp-item__title" href="/vacancy/111"></div>'
@@ -546,13 +548,12 @@ class TestSearchTool:
 
     def test_returns_ids_to_model(self, monkeypatch):
         result = self._run(monkeypatch)
-        assert "111" in result.content[0].text
-        assert "222" in result.content[0].text
-        assert "страница 1" in result.content[0].text
+        assert result.content[0].text == "Found: 2"
+        assert result.structured_content == {"result": [111, 222]}
 
-    def test_no_view_copy(self, monkeypatch):
+    def test_ids_travel_in_structured_content(self, monkeypatch):
         result = self._run(monkeypatch)
-        assert result.structured_content is None
+        assert result.structured_content == {"result": [111, 222]}
 
     def test_page_goes_to_query(self, monkeypatch):
         seen: dict[str, str] = {}
@@ -623,14 +624,13 @@ class TestSearchTool:
 
     def test_beyond_last_page_is_empty(self, monkeypatch):
         result = self._run(monkeypatch, html=b"<html></html>")
-        assert "Ничего не найдено" in result.content[0].text
+        assert result.content[0].text == "No results found."
+        assert result.structured_content == {"result": []}
 
-    def test_empty_result_states_the_fixed_filters(self, monkeypatch):
-        """Filters are a fact about this server, not a guess about the cause."""
-        text = self._run(monkeypatch, html=b"<html></html>").content[0].text
-        assert "Программист 1С" in text
-        assert "2 раза в месяц" in text
-        assert "опыт от 1 года" in text
+    def test_empty_result_is_stated_plainly(self, monkeypatch):
+        """The message says there were no matches, and does not guess why."""
+        result = self._run(monkeypatch, html=b"<html></html>")
+        assert result.content[0].text == "No results found."
 
     def test_empty_result_does_not_guess_the_cause(self, monkeypatch):
         """The server knows what filters it sent, not why hh.ru returned
@@ -639,11 +639,14 @@ class TestSearchTool:
         assert "возможных причин" not in text.lower()
         assert "отсеял" not in text.lower()
 
-    @pytest.mark.parametrize(("text", "page", "message"), [
-        ("", 0, "Invalid text"),
-        ("   ", 0, "Invalid text"),
-        ("ok", -1, "Invalid page: -1"),
+    @pytest.mark.parametrize(("text", "page"), [
+        ("", 0),
+        ("   ", 0),
+        ("ok", -1),
     ])
-    def test_validation(self, monkeypatch, text, page, message):
-        with pytest.raises(ToolError, match=message):
-            app_module.search(text, page)
+    def test_validation(self, monkeypatch, text, page):
+        monkeypatch.setattr(
+            service, "fetch_page", lambda url, **kwargs: self.SERP_HTML
+        )
+        result = _call("search", {"text": text, "page": page})
+        assert result.is_error is True
