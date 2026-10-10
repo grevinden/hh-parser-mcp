@@ -1,0 +1,3 @@
+- [Слои: поверхность / сценарии / чтение / кеш](memory/decision/layers.md) — где какой слой и почему
+- [Запуск из исходников, без сборки пакета](memory/environmental/run-from-source.md) — package = false, версия из pyproject
+- [Документация — текущее состояние, а не история правок](memory/feedback/docs-current-state.md) — удалять фичу вместе с её описанием
