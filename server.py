@@ -129,10 +129,9 @@ class LoggingFileTreeStore(FileTreeStore):
     """File-backed store that logs every read, miss and write.
 
     ``ResponseCachingMiddleware`` decides *when* the store is consulted; this
-    subclass only makes those decisions visible, so a log shows which tier
-    answered: the disk cache here, the search database in
-    :mod:`hh_mcp.search_index`, or hh.ru itself. Values are reported by size
-    only — never their content, which is a whole vacancy page.
+    subclass only makes those decisions visible, so a log shows whether the
+    disk cache or hh.ru answered. Values are reported by size only — never
+    their content, which is a whole vacancy page.
     """
 
     def __init__(self, *, logger: logging.Logger, **kwargs: Any) -> None:

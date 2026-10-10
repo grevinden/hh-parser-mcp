@@ -415,9 +415,6 @@ class TestResources:
             "build",
             "python",
             "fastmcp",
-            "search",
-            "search_endpoint",
-            "search_error",
         } <= set(facts)
 
     def test_search_guide_resource_is_markdown(self):

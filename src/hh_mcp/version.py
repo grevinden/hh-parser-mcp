@@ -105,28 +105,16 @@ def runtime_info() -> dict[str, Any]:
     Returns
     -------
     dict[str, Any]
-        Keys ``version``, ``commit``, ``build``, ``python``, ``fastmcp``,
-        ``search``, ``search_endpoint`` and ``search_error``. ``version`` is the
-        package version and ``build`` is :data:`BUILD_ID`; they differ only
-        inside a git checkout. ``search`` is one of ``missing``, ``unavailable``,
-        ``error`` or ``ready`` — see :func:`hh_mcp.search_index.status` — and
-        ``search_error`` carries the reason, or the last write failure.
-        ``search_endpoint`` is the Upstash host after normalization, or
-        ``None``: with ``search="ready"`` it names the index actually written
-        to, and with a mangled URL it shows what was understood instead.
+        Keys ``version``, ``commit``, ``build``, ``python`` and ``fastmcp``.
+        ``version`` is the package version and ``build`` is :data:`BUILD_ID`;
+        they differ only inside a git checkout.
     """
-    from hh_mcp.search_index import endpoint, last_error, status
-
-    search = status()
     return {
         "version": package_version(),
         "commit": short_commit(),
         "build": BUILD_ID,
         "python": ".".join(str(part) for part in sys.version_info[:3]),
         "fastmcp": _distribution_version("fastmcp"),
-        "search": search["state"],
-        "search_endpoint": endpoint(),
-        "search_error": search["error"] or last_error(),
     }
 
 

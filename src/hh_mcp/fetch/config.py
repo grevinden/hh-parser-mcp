@@ -13,8 +13,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from .. import __version__
-
 __all__ = [
     "DEFAULT_USER_AGENT",
     "DEFAULT_TIMEOUT",
