@@ -22,11 +22,12 @@ from key_value.aio.stores.filetree import (
     FileTreeV1KeySanitizationStrategy,
 )
 
-import hh_mcp.app as app_module
+from hh_mcp import cache as cache_module
+from hh_mcp import service
 from hh_mcp.app import mcp
 
 CACHED_TOOLS: list[str] = ["vacancy", "company"]
-"""Same tool allowlist as ``server.CACHED_TOOLS``."""
+"""Same tool allowlist as ``hh_mcp.cache.CACHED_TOOLS``."""
 
 
 def _counting_fetch(calls: list[str]):
@@ -34,7 +35,7 @@ def _counting_fetch(calls: list[str]):
 
     def fake(url: str, **kwargs: object) -> str:
         calls.append(url)
-        # Body padded past hh_mcp.app.MIN_CONTENT_CHARS so the empty-page
+        # Body padded past hh_mcp.service.MIN_CONTENT_CHARS so the empty-page
         # guard does not reject the stub.
         return f"# Page {len(calls)}: {url}\n" + ("Тело страницы. " * 40)
 
@@ -80,7 +81,7 @@ class TestResponseCaching:
 
     def test_repeat_vacancy_id_served_from_cache(self, tmp_path, monkeypatch):
         calls: list[str] = []
-        monkeypatch.setattr(app_module, "fetch_as_markdown", _counting_fetch(calls))
+        monkeypatch.setattr(service, "fetch_as_markdown", _counting_fetch(calls))
         server = _build_server(tmp_path / "cache")
 
         first = _call_tool(server, "vacancy", {"id": 138156968})
@@ -99,7 +100,7 @@ class TestResponseCaching:
 
     def test_repeat_company_id_served_from_cache(self, tmp_path, monkeypatch):
         calls: list[str] = []
-        monkeypatch.setattr(app_module, "fetch_as_markdown", _counting_fetch(calls))
+        monkeypatch.setattr(service, "fetch_as_markdown", _counting_fetch(calls))
         server = _build_server(tmp_path / "cache")
 
         first = _call_tool(server, "company", {"id": 9410116})
@@ -114,7 +115,7 @@ class TestResponseCaching:
         # company is NOT on this server's cached-tools allowlist —
         # repeating it must call fetch every time.
         calls: list[str] = []
-        monkeypatch.setattr(app_module, "fetch_as_markdown", _counting_fetch(calls))
+        monkeypatch.setattr(service, "fetch_as_markdown", _counting_fetch(calls))
         server = _build_server(tmp_path / "cache", included_tools=["vacancy"])
 
         first = _call_tool(server, "company", {"id": 9410116})
@@ -131,7 +132,7 @@ class TestResponseCaching:
         # A NEW server instance over the SAME directory serves the second call
         # from disk — the file-backed store persists across restarts.
         calls: list[str] = []
-        monkeypatch.setattr(app_module, "fetch_as_markdown", _counting_fetch(calls))
+        monkeypatch.setattr(service, "fetch_as_markdown", _counting_fetch(calls))
 
         server1 = _build_server(tmp_path / "cache")
         first = _call_tool(server1, "vacancy", {"id": 138156968})
@@ -149,19 +150,16 @@ class TestCacheEnabled:
     @pytest.mark.parametrize("value", ["0", "off", "false", "no", "OFF", " No "])
     def test_off_values_disable_cache(self, monkeypatch, value):
         monkeypatch.setenv("HH_MCP_CACHE", value)
-        import server
 
-        assert server.cache_enabled() is False
+        assert cache_module.cache_enabled() is False
 
     @pytest.mark.parametrize("value", ["1", "on", "true", "yes", ""])
     def test_other_values_keep_cache(self, monkeypatch, value):
         monkeypatch.setenv("HH_MCP_CACHE", value)
-        import server
 
-        assert server.cache_enabled() is True
+        assert cache_module.cache_enabled() is True
 
     def test_unset_keeps_cache(self, monkeypatch):
         monkeypatch.delenv("HH_MCP_CACHE", raising=False)
-        import server
 
-        assert server.cache_enabled() is True
+        assert cache_module.cache_enabled() is True

@@ -1,0 +1,221 @@
+"""Disk response cache: the caching layer of hh-mcp.
+
+A tool call with the same arguments is served from a file-backed store instead
+of hitting hh.ru again. The cache is a `ResponseCachingMiddleware` over a
+`FileTreeStore`; this module owns the store, its logging subclass and the
+environment switches, so the entry point (``server.py``) only wires it up.
+
+See :func:`attach`.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+from fastmcp import FastMCP
+from fastmcp.server.middleware.caching import ResponseCachingMiddleware
+from key_value.aio.stores.filetree import (
+    FileTreeStore,
+    FileTreeV1CollectionSanitizationStrategy,
+    FileTreeV1KeySanitizationStrategy,
+)
+
+__all__ = [
+    "CACHE_DIR",
+    "CACHE_OFF_VALUES",
+    "CACHE_TTL_S",
+    "CACHED_TOOLS",
+    "LoggingFileTreeStore",
+    "attach",
+    "cache_enabled",
+]
+
+# --- Configuration ---------------------------------------------------------
+
+logger = logging.getLogger("hh_mcp.cache")
+
+CACHE_DIR: Path = Path(
+    os.environ.get("HH_MCP_CACHE_DIR", "~/.cache/hh-mcp")
+).expanduser()
+"""Directory for the file-backed response cache (override via env)."""
+
+CACHE_TTL_S: int = 3600
+"""TTL for cached tool responses (1 hour; failed calls are never cached)."""
+
+CACHED_TOOLS: tuple[str, ...] = ("vacancy", "company")
+"""Tools whose successful responses are cached (hh.ru page fetches).
+
+``search`` is deliberately absent — its results change between pages.
+"""
+
+CACHE_OFF_VALUES: frozenset[str] = frozenset({"0", "off", "false", "no"})
+"""Values of ``HH_MCP_CACHE`` that turn the response cache off."""
+
+
+# --- Store -----------------------------------------------------------------
+
+
+def _approx_chars(value: Any) -> int:
+    """Return a cheap size estimate for log lines, without serializing.
+
+    Parameters
+    ----------
+    value:
+        Arbitrary nested structure — the cached response is a mapping of
+        content blocks, whose payload can be tens of kilobytes.
+
+    Returns
+    -------
+    int
+        Sum of the string lengths of every leaf, plus mapping keys, in
+        characters (what a log line comparing sizes must use).
+    """
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, Mapping):
+        return sum(len(str(key)) + _approx_chars(item) for key, item in value.items())
+    if isinstance(value, (list, tuple)):
+        return sum(_approx_chars(item) for item in value)
+    return len(str(value))
+
+
+class LoggingFileTreeStore(FileTreeStore):
+    """File-backed store that logs every read, miss and write.
+
+    ``ResponseCachingMiddleware`` decides *when* the store is consulted; this
+    subclass only makes those decisions visible, so a log shows whether the
+    disk cache or hh.ru answered. Values are reported by size only — never
+    their content, which is a whole vacancy page.
+    """
+
+    def __init__(self, *, logger: logging.Logger, **kwargs: Any) -> None:
+        """Build the store and remember where to log.
+
+        Parameters
+        ----------
+        logger:
+            Logger to write the cache decisions to.
+        **kwargs:
+            Forwarded verbatim to :class:`FileTreeStore`.
+        """
+        super().__init__(**kwargs)
+        self._logger = logger
+
+    async def get(self, key: str, **kwargs: Any) -> dict[str, Any] | None:
+        """Read one entry and log whether it was there.
+
+        Parameters
+        ----------
+        key:
+            Store key, as produced by the middleware.
+        **kwargs:
+            Forwarded verbatim to the base store.
+
+        Returns
+        -------
+        dict[str, Any] | None
+            The stored value, or ``None`` when the key is absent or expired.
+        """
+        value = await super().get(key, **kwargs)
+        if value is None:
+            self._logger.info("disk cache miss: key=%s", key)
+        else:
+            self._logger.info(
+                "disk cache hit: key=%s chars=%d", key, _approx_chars(value)
+            )
+        return value
+
+    async def put(
+        self, key: str, value: Mapping[str, Any], **kwargs: Any
+    ) -> None:
+        """Write one entry and log the write.
+
+        Parameters
+        ----------
+        key:
+            Store key, as produced by the middleware.
+        value:
+            Response to store.
+        **kwargs:
+            Forwarded verbatim to the base store.
+        """
+        await super().put(key, value, **kwargs)
+        self._logger.info(
+            "disk cache write: key=%s chars=%d ttl=%s",
+            key,
+            _approx_chars(value),
+            kwargs.get("ttl"),
+        )
+
+
+# --- Wiring ----------------------------------------------------------------
+
+
+def cache_enabled() -> bool:
+    """Return ``True`` unless ``HH_MCP_CACHE`` says otherwise.
+
+    Returns
+    -------
+    bool
+        ``False`` when ``HH_MCP_CACHE`` is set to one of
+        :data:`CACHE_OFF_VALUES` (case-insensitive), ``True`` otherwise
+        (including when the variable is unset).
+    """
+    raw = os.environ.get("HH_MCP_CACHE")
+    if raw is None:
+        return True
+    return raw.strip().casefold() not in CACHE_OFF_VALUES
+
+
+def attach(mcp: FastMCP) -> None:
+    """Attach the disk response cache to *mcp* when it is enabled.
+
+    Parameters
+    ----------
+    mcp:
+        The server to add the middleware to. With ``HH_MCP_CACHE`` off, nothing
+        is attached and no cache directory is created.
+
+    Returns
+    -------
+    None
+    """
+    if not cache_enabled():
+        logger.info(
+            "response cache disabled via HH_MCP_CACHE=%s",
+            os.environ.get("HH_MCP_CACHE"),
+        )
+        return
+
+    # The sanitization strategies below inspect the directory (max filename
+    # length), so it must exist before they are constructed.
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    store = LoggingFileTreeStore(
+        logger=logger,
+        data_directory=CACHE_DIR,
+        key_sanitization_strategy=FileTreeV1KeySanitizationStrategy(CACHE_DIR),
+        collection_sanitization_strategy=FileTreeV1CollectionSanitizationStrategy(
+            CACHE_DIR
+        ),
+    )
+
+    mcp.add_middleware(
+        ResponseCachingMiddleware(
+            cache_storage=store,
+            call_tool_settings={
+                "ttl": CACHE_TTL_S,
+                "included_tools": list(CACHED_TOOLS),
+            },
+        )
+    )
+    logger.info(
+        "response cache enabled: tier=disk dir=%s ttl=%ss tools=%s",
+        CACHE_DIR,
+        CACHE_TTL_S,
+        ", ".join(CACHED_TOOLS),
+    )

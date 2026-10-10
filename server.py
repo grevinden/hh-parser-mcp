@@ -2,54 +2,35 @@
 
 Run from the repository root::
 
-    uv run fastmcp run          # reads fastmcp.json (transport http, /mcp)
-    uv run fastmcp dev apps .   # dev preview: MCP server + browser UI
+    uv run fastmcp run            # reads fastmcp.json (transport http, /mcp)
+    uv run fastmcp dev apps fastmcp.json
 
-The launcher imports this module and picks up :data:`mcp` (the
-``entrypoint`` declared in ``fastmcp.json``). The tools themselves live in
-``hh_mcp.app``; here we only add cross-cutting middleware.
+The launcher imports this module and picks up :data:`mcp` (the ``entrypoint``
+declared in ``fastmcp.json``). This file is the composition root: it puts the
+source tree on the import path, configures logging for the ``hh_mcp`` namespace
+and attaches the cache layer. Everything else lives in its own layer:
 
-The server enables :class:`ResponseCachingMiddleware` with a **file-backed**
-store (``FileTreeStore`` from ``py-key-value-aio``): repeating a tool call
-with the same argument (e.g. the same vacancy id) is served from the cache
-instead of hitting hh.ru again.
+``hh_mcp.app``
+    the MCP surface — tools and resources.
+``hh_mcp.service``
+    the hh.ru use-cases — URLs, fetch orchestration, error wording.
+``hh_mcp.fetch``
+    the network — SSRF guard, HTTP transport, HTML → Markdown.
+``hh_mcp.cache``
+    the response cache — a file-backed store behind the tools.
 
-Cache control (environment):
-
-``HH_MCP_CACHE=0``
-    Disable the response cache entirely (the middleware is not attached).
-    Every call hits hh.ru, which is what you want while iterating on the
-    fetch pipeline — otherwise the same id keeps serving the stale
-    Markdown (and ``tools/list`` keeps a stale tool list) for the whole TTL.
-    Accepted off values: ``0``, ``off``, ``false``, ``no`` (case-insensitive).
-``HH_MCP_CACHE_DIR``
-    Directory for the file-backed store (default ``~/.cache/hh-mcp``).
-    Remove the directory **while the server is stopped** — a live
-    ``FileTreeStore`` cannot recreate it and fails writes with
-    ``FileNotFoundError``.
-
-Examples::
-
-    uv run fastmcp run                              # cache on (default)
-    HH_MCP_CACHE=0 uv run fastmcp run               # cache off
-    HH_MCP_CACHE=0 uv run fastmcp dev apps fastmcp.json
+The cache is a :class:`ResponseCachingMiddleware` with a **file-backed** store
+(``FileTreeStore`` from ``py-key-value-aio``): repeating a tool call with the
+same argument (e.g. the same vacancy id) is served from the cache instead of
+hitting hh.ru again. See :mod:`hh_mcp.cache` for the env switches
+(``HH_MCP_CACHE``, ``HH_MCP_CACHE_DIR``).
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import sys
-from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
-
-from fastmcp.server.middleware.caching import ResponseCachingMiddleware
-from key_value.aio.stores.filetree import (
-    FileTreeStore,
-    FileTreeV1CollectionSanitizationStrategy,
-    FileTreeV1KeySanitizationStrategy,
-)
 
 # The application is run from source and is not installed as a distribution
 # (``[tool.uv] package = false``), so ``src`` is not on the import path. Add it
@@ -60,29 +41,9 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from hh_mcp.app import mcp
+from hh_mcp.cache import attach
 
-__all__ = ["LoggingFileTreeStore", "mcp"]
-
-# --- Response cache ---------------------------------------------------------
-
-logger = logging.getLogger("hh_mcp.server")
-
-CACHE_DIR: Path = Path(
-    os.environ.get("HH_MCP_CACHE_DIR", "~/.cache/hh-mcp")
-).expanduser()
-"""Directory for the file-backed response cache (override via env)."""
-
-CACHE_TTL_S: int = 3600
-"""TTL for cached tool responses (1 hour; failed calls are never cached)."""
-
-CACHED_TOOLS: tuple[str, ...] = ("vacancy", "company")
-"""Tools whose successful responses are cached (hh.ru page fetches).
-
-``search`` is deliberately absent — its results change between pages.
-"""
-
-CACHE_OFF_VALUES: frozenset[str] = frozenset({"0", "off", "false", "no"})
-"""Values of ``HH_MCP_CACHE`` that turn the response cache off."""
+__all__ = ["mcp"]
 
 
 def _configure_logging() -> None:
@@ -109,148 +70,5 @@ def _configure_logging() -> None:
     namespace.propagate = False
 
 
-def _approx_chars(value: Any) -> int:
-    """Return a cheap size estimate for log lines, without serializing.
-
-    Parameters
-    ----------
-    value:
-        Arbitrary nested structure — the cached response is a mapping of
-        content blocks, whose payload can be tens of kilobytes.
-
-    Returns
-    -------
-    int
-        Sum of the string lengths of every leaf, plus mapping keys, in
-        characters — the unit a log line comparing sizes must use, because the
-        index write counts bytes and the two differ for Russian text.
-    """
-    if isinstance(value, str):
-        return len(value)
-    if isinstance(value, Mapping):
-        return sum(len(str(key)) + _approx_chars(item) for key, item in value.items())
-    if isinstance(value, (list, tuple)):
-        return sum(_approx_chars(item) for item in value)
-    return len(str(value))
-
-
-class LoggingFileTreeStore(FileTreeStore):
-    """File-backed store that logs every read, miss and write.
-
-    ``ResponseCachingMiddleware`` decides *when* the store is consulted; this
-    subclass only makes those decisions visible, so a log shows whether the
-    disk cache or hh.ru answered. Values are reported by size only — never
-    their content, which is a whole vacancy page.
-    """
-
-    def __init__(self, *, logger: logging.Logger, **kwargs: Any) -> None:
-        """Build the store and remember where to log.
-
-        Parameters
-        ----------
-        logger:
-            Logger to write the cache decisions to.
-        **kwargs:
-            Forwarded verbatim to :class:`FileTreeStore`.
-        """
-        super().__init__(**kwargs)
-        self._logger = logger
-
-    async def get(self, key: str, **kwargs: Any) -> dict[str, Any] | None:
-        """Read one entry and log whether it was there.
-
-        Parameters
-        ----------
-        key:
-            Store key, as produced by the middleware.
-        **kwargs:
-            Forwarded verbatim to the base store.
-
-        Returns
-        -------
-        dict[str, Any] | None
-            The stored value, or ``None`` when the key is absent or expired.
-        """
-        value = await super().get(key, **kwargs)
-        if value is None:
-            self._logger.info("disk cache miss: key=%s", key)
-        else:
-            self._logger.info(
-                "disk cache hit: key=%s chars=%d", key, _approx_chars(value)
-            )
-        return value
-
-    async def put(
-        self, key: str, value: Mapping[str, Any], **kwargs: Any
-    ) -> None:
-        """Write one entry and log the write.
-
-        Parameters
-        ----------
-        key:
-            Store key, as produced by the middleware.
-        value:
-            Response to store.
-        **kwargs:
-            Forwarded verbatim to the base store.
-        """
-        await super().put(key, value, **kwargs)
-        self._logger.info(
-            "disk cache write: key=%s chars=%d ttl=%s",
-            key,
-            _approx_chars(value),
-            kwargs.get("ttl"),
-        )
-
-
-def cache_enabled() -> bool:
-    """Return ``True`` unless ``HH_MCP_CACHE`` says otherwise.
-
-    Returns:
-        bool
-            ``False`` when ``HH_MCP_CACHE`` is set to one of
-            :data:`CACHE_OFF_VALUES` (case-insensitive), ``True``
-            otherwise (including when the variable is unset).
-    """
-    raw = os.environ.get("HH_MCP_CACHE")
-    if raw is None:
-        return True
-    return raw.strip().casefold() not in CACHE_OFF_VALUES
-
-
 _configure_logging()
-
-if cache_enabled():
-    # The sanitization strategies below inspect the directory (max filename
-    # length), so it must exist before they are constructed.
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-    cache_store = LoggingFileTreeStore(
-        logger=logger,
-        data_directory=CACHE_DIR,
-        key_sanitization_strategy=FileTreeV1KeySanitizationStrategy(CACHE_DIR),
-        collection_sanitization_strategy=FileTreeV1CollectionSanitizationStrategy(
-            CACHE_DIR
-        ),
-    )
-
-    mcp.add_middleware(
-        ResponseCachingMiddleware(
-            cache_storage=cache_store,
-            call_tool_settings={
-                "ttl": CACHE_TTL_S,
-                "included_tools": list(CACHED_TOOLS),
-            },
-        )
-    )
-    logger.info(
-        "response cache enabled: tier=disk dir=%s ttl=%ss tools=%s",
-        CACHE_DIR,
-        CACHE_TTL_S,
-        ", ".join(CACHED_TOOLS),
-    )
-else:
-    logger.info(
-        "response cache disabled via HH_MCP_CACHE=%s",
-        os.environ.get("HH_MCP_CACHE"),
-    )
+attach(mcp)

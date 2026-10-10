@@ -20,6 +20,7 @@ from fastmcp.client import Client
 from fastmcp.client.transports.memory import FastMCPTransport
 
 import hh_mcp.app as app_module
+from hh_mcp import service
 from hh_mcp.app import company, vacancy
 from hh_mcp.fetch.errors import (
     ConversionError,
@@ -42,7 +43,7 @@ from hh_mcp.fetch.errors import (
 def _fake_fetch(ok_text: str = "ok"):
     """Build a ``fetch_as_markdown`` replacement returning *ok_text*.
 
-    The body is padded past :data:`hh_mcp.app.MIN_CONTENT_CHARS` so it looks
+    The body is padded past :data:`hh_mcp.service.MIN_CONTENT_CHARS` so it looks
     like a real page — short bodies are rejected by the empty-page guard.
     """
 
@@ -77,31 +78,31 @@ class TestToolErrorMapping:
     """app._tool_error — fetch exceptions → user-facing ToolError messages."""
 
     def test_ssre(self):
-        err = app_module._tool_error(SSRError("http://localhost"))
+        err = service.tool_error(SSRError("http://localhost"))
         assert str(err) == "SSRF guard rejected the URL"
 
     def test_invalid_url(self):
-        err = app_module._tool_error(InvalidURLError("not a url"))
+        err = service.tool_error(InvalidURLError("not a url"))
         assert str(err) == "Invalid URL: not a url"
 
     def test_timeout(self):
-        err = app_module._tool_error(FetchTimeoutError("read timed out"))
+        err = service.tool_error(FetchTimeoutError("read timed out"))
         assert str(err) == "Timeout after 30s"
 
     def test_response_too_large(self):
-        err = app_module._tool_error(ResponseTooLargeError("cap exceeded"))
+        err = service.tool_error(ResponseTooLargeError("cap exceeded"))
         assert str(err) == "Response too large > 120000"
 
     def test_parse_error(self):
-        err = app_module._tool_error(ParseError("bad utf-8"))
+        err = service.tool_error(ParseError("bad utf-8"))
         assert str(err) == "Parse error: bad utf-8"
 
     def test_conversion_error(self):
-        err = app_module._tool_error(ConversionError("converter crashed"))
+        err = service.tool_error(ConversionError("converter crashed"))
         assert str(err) == "Parse error: converter crashed"
 
     def test_unsupported_content_type(self):
-        err = app_module._tool_error(
+        err = service.tool_error(
             UnsupportedContentTypeError("application/json not accepted")
         )
         assert str(err) == "Unsupported content type: application/json not accepted"
@@ -109,11 +110,11 @@ class TestToolErrorMapping:
     def test_transport_error(self):
         # FetchTimeoutError / ResponseTooLargeError are TransportError subclasses
         # but must NOT land in the generic transport branch.
-        err = app_module._tool_error(TransportError("connection refused"))
+        err = service.tool_error(TransportError("connection refused"))
         assert str(err) == "Transport error: connection refused"
 
     def test_generic_fetch_error(self):
-        err = app_module._tool_error(Exception("boom"))
+        err = service.tool_error(Exception("boom"))
         assert str(err) == "Unexpected error: boom"
 
 
@@ -133,11 +134,11 @@ class TestHttpStatusErrors:
         (418, "Unexpected HTTP status 418"),
     ])
     def test_status_is_explained(self, status, expected):
-        err = app_module._tool_error(self._status_error(status))
+        err = service.tool_error(self._status_error(status))
         assert expected in str(err)
 
     def test_subject_names_the_page(self):
-        err = app_module._tool_error(self._status_error(404), subject="Vacancy 1")
+        err = service.tool_error(self._status_error(404), subject="Vacancy 1")
         assert str(err) == "Vacancy 1 does not exist on hh.ru (HTTP 404)."
 
     @pytest.mark.parametrize("status", [400, 404])
@@ -145,7 +146,7 @@ class TestHttpStatusErrors:
         """hh.ru answers an unknown vacancy with 404 and an unknown employer
         with 400. Both mean the same to the caller, so the agent must not be
         left interpreting two codes."""
-        message = app_module._tool_error(
+        message = service.tool_error(
             self._status_error(status), subject="Employer page 1"
         )
         assert str(message) == f"Employer page 1 does not exist on hh.ru (HTTP {status})."
@@ -154,32 +155,32 @@ class TestHttpStatusErrors:
         """No list of possible causes: the agent needs a conclusion, not a menu
         of guesses to weigh. "Vacancy 1." has an abbreviation dot; the message
         must not add a second sentence after it."""
-        text = str(app_module._tool_error(self._status_error(404), subject="Vacancy 1"))
+        text = str(service.tool_error(self._status_error(404), subject="Vacancy 1"))
         assert text == "Vacancy 1 does not exist on hh.ru (HTTP 404)."
         assert len(text) < 60
 
     def test_message_does_not_speculate(self):
         """The server observed a status, not a reason for it."""
-        text = str(app_module._tool_error(self._status_error(404), subject="Vacancy 1"))
+        text = str(service.tool_error(self._status_error(404), subject="Vacancy 1"))
         for guess in ("maybe", "perhaps", "possibly", "wrong", "deleted", "moved"):
             assert guess not in text.lower(), guess
 
     def test_no_httpx_noise_in_message(self):
         """The raw httpx text carries the redirect host and an MDN link."""
-        text = str(app_module._tool_error(self._status_error(404), subject="Vacancy 1"))
+        text = str(service.tool_error(self._status_error(404), subject="Vacancy 1"))
         assert "kolomna" not in text
         assert "developer.mozilla.org" not in text
         assert "Client error" not in text
 
     def test_search_404_says_what_was_searched(self):
-        err = app_module._tool_error(self._status_error(404), subject="The vacancy search")
+        err = service.tool_error(self._status_error(404), subject="The vacancy search")
         assert str(err) == "The vacancy search does not exist on hh.ru (HTTP 404)."
 
     def test_vacancy_tool_reports_missing_page(self, monkeypatch):
         def boom(url, **kwargs):
             raise self._status_error(404)
 
-        monkeypatch.setattr(app_module, "fetch_as_markdown", boom)
+        monkeypatch.setattr(service, "fetch_as_markdown", boom)
         with pytest.raises(ToolError, match="Vacancy 38185674 does not exist on hh.ru"):
             vacancy(38185674)
 
@@ -187,7 +188,7 @@ class TestHttpStatusErrors:
         def boom(url, **kwargs):
             raise HttpStatusError(400, "https://kolomna.hh.ru/employer/1", "hh.ru")
 
-        monkeypatch.setattr(app_module, "fetch_as_markdown", boom)
+        monkeypatch.setattr(service, "fetch_as_markdown", boom)
         with pytest.raises(ToolError, match="Employer page 9410116"):
             company(9410116)
 
@@ -195,7 +196,7 @@ class TestHttpStatusErrors:
         def boom(url, **kwargs):
             raise HttpStatusError(429, "https://hh.ru/search/vacancy", "hh.ru")
 
-        monkeypatch.setattr(app_module, "fetch_page", boom)
+        monkeypatch.setattr(service, "fetch_page", boom)
         with pytest.raises(ToolError, match="rate-limited"):
             app_module.search("аналитик", page=0)
 
@@ -207,17 +208,17 @@ class TestToolValidation:
     """ID validation happens before any fetch call."""
 
     def test_vacancy_rejects_zero(self, monkeypatch):
-        monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch())
+        monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch())
         with pytest.raises(ToolError, match="Invalid ID: 0"):
             vacancy(0)
 
     def test_vacancy_rejects_negative(self, monkeypatch):
-        monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch())
+        monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch())
         with pytest.raises(ToolError, match="Invalid ID: -1"):
             vacancy(-1)
 
     def test_company_rejects_zero(self, monkeypatch):
-        monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch())
+        monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch())
         with pytest.raises(ToolError, match="Invalid ID: 0"):
             company(0)
 
@@ -228,7 +229,7 @@ class TestToolValidation:
             seen["url"] = url
             return "markdown\n" + ("Тело страницы. " * 40)
 
-        monkeypatch.setattr(app_module, "fetch_as_markdown", fake)
+        monkeypatch.setattr(service, "fetch_as_markdown", fake)
 
         # Text only: the payload must not be mirrored into a UI copy.
         result = vacancy(38185674)
@@ -263,32 +264,32 @@ class TestMcpTools:
         ],
     )
     def test_success(self, monkeypatch, tool, id_, url_frag):
-        monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch("# Page"))
+        monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch("# Page"))
         result = _call(tool, {"id": id_})
         assert result.is_error is False
         assert url_frag in result.content[0].text
 
     def test_invalid_id_zero(self, monkeypatch):
-        monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch())
+        monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch())
         result = _call("vacancy", {"id": 0})
         assert result.is_error is True
         assert "Invalid ID: 0" in result.content[0].text
 
     def test_invalid_id_negative(self, monkeypatch):
-        monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch())
+        monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch())
         result = _call("company", {"id": -1})
         assert result.is_error is True
         assert "Invalid ID: -1" in result.content[0].text
 
     def test_ssre(self, monkeypatch):
-        monkeypatch.setattr(app_module, "fetch_as_markdown", _raising_fetch(SSRError()))
+        monkeypatch.setattr(service, "fetch_as_markdown", _raising_fetch(SSRError()))
         result = _call("vacancy", {"id": 123})
         assert result.is_error is True
         assert "SSRF guard rejected the URL" in result.content[0].text
 
     def test_timeout(self, monkeypatch):
         monkeypatch.setattr(
-            app_module,
+            service,
             "fetch_as_markdown",
             _raising_fetch(FetchTimeoutError("timed out")),
         )
@@ -298,7 +299,7 @@ class TestMcpTools:
 
     def test_transport_error(self, monkeypatch):
         monkeypatch.setattr(
-            app_module,
+            service,
             "fetch_as_markdown",
             _raising_fetch(TransportError("connection refused")),
         )
@@ -308,7 +309,7 @@ class TestMcpTools:
 
     def test_response_too_large(self, monkeypatch):
         monkeypatch.setattr(
-            app_module,
+            service,
             "fetch_as_markdown",
             _raising_fetch(ResponseTooLargeError("5 MiB > 4 MiB cap")),
         )
@@ -363,13 +364,13 @@ class TestSingleCopyResponse:
         assert not [u for u in asyncio.run(_run()) if u.startswith("ui://")]
 
     def test_page_tool_ships_one_copy(self, monkeypatch):
-        monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch(self.MARKER))
+        monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch(self.MARKER))
         result = vacancy(38185674)
         assert result.model_dump_json().count(self.MARKER) == 1
 
     def test_search_ships_one_copy(self, monkeypatch):
         html = b'<div data-qa="serp-item__title" href="/vacancy/111"></div>'
-        monkeypatch.setattr(app_module, "fetch_page", lambda url, **kw: html)
+        monkeypatch.setattr(service, "fetch_page", lambda url, **kw: html)
         result = app_module.search("DevOps", page=0)
         assert result.model_dump_json().count("111") == 1
 
@@ -460,7 +461,7 @@ class TestSearchGuideContent:
 
     def test_operators_match_the_constant(self):
         """A filter in the guide that is not in the URL, or the reverse, is a bug."""
-        for _, value in app_module.SEARCH_PARAMS:
+        for _, value in service.SEARCH_PARAMS:
             if value in {"false", "vacancy_search_list", "drawer_filter"}:
                 continue
             assert value in self.GUIDE, value
@@ -490,14 +491,14 @@ class TestEmptyPageGuard:
         # hh.ru redirects closed vacancies to a landing page; after
         # sanitization only the layout title survives.
         monkeypatch.setattr(
-            app_module, "fetch_as_markdown", lambda url, **kw: "# HeadHunter"
+            service, "fetch_as_markdown", lambda url, **kw: "# HeadHunter"
         )
         with pytest.raises(ToolError, match="has no content"):
             vacancy(137405648)
 
     def test_stub_page_message_names_the_vacancy(self, monkeypatch):
         monkeypatch.setattr(
-            app_module, "fetch_as_markdown", lambda url, **kw: "# HeadHunter"
+            service, "fetch_as_markdown", lambda url, **kw: "# HeadHunter"
         )
         with pytest.raises(ToolError, match="Vacancy 137405648 has no content"):
             vacancy(137405648)
@@ -506,7 +507,7 @@ class TestEmptyPageGuard:
         """The server observed an empty page, nothing more. Saying "closed or
         archived" would be inventing a cause."""
         monkeypatch.setattr(
-            app_module, "fetch_as_markdown", lambda url, **kw: "# HeadHunter"
+            service, "fetch_as_markdown", lambda url, **kw: "# HeadHunter"
         )
         with pytest.raises(ToolError) as excinfo:
             vacancy(137405648)
@@ -516,13 +517,13 @@ class TestEmptyPageGuard:
 
     def test_short_page_with_company_name_is_rejected(self, monkeypatch):
         monkeypatch.setattr(
-            app_module, "fetch_as_markdown", lambda url, **kw: "# ООО Ромашка"
+            service, "fetch_as_markdown", lambda url, **kw: "# ООО Ромашка"
         )
         with pytest.raises(ToolError, match="has no content"):
             company(12345)
 
     def test_real_page_passes(self, monkeypatch):
-        monkeypatch.setattr(app_module, "fetch_as_markdown", _fake_fetch("# Page\n" + "x" * 500))
+        monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch("# Page\n" + "x" * 500))
         assert "Page" in vacancy(138156968).content[0].text
 
 
@@ -537,7 +538,7 @@ class TestSearchTool:
 
     def _run(self, monkeypatch, html=None):
         monkeypatch.setattr(
-            app_module,
+            service,
             "fetch_page",
             lambda url, **kwargs: html if html is not None else self.SERP_HTML,
         )
@@ -560,7 +561,7 @@ class TestSearchTool:
             seen["url"] = url
             return self.SERP_HTML
 
-        monkeypatch.setattr(app_module, "fetch_page", fake_page)
+        monkeypatch.setattr(service, "fetch_page", fake_page)
         app_module.search("1С", page=7)
         assert "text=1%D0%A1" in seen["url"]
         assert seen["url"].endswith("&page=7")
@@ -573,13 +574,13 @@ class TestSearchTool:
             seen["url"] = url
             return self.SERP_HTML
 
-        monkeypatch.setattr(app_module, "fetch_page", fake_page)
+        monkeypatch.setattr(service, "fetch_page", fake_page)
         app_module.search("аналитик", page=0)
 
         query = urlsplit(seen["url"]).query
         pairs = parse_qsl(query, keep_blank_values=True)
         assert pairs[0] == ("text", "аналитик")
-        assert tuple(pairs[1:-1]) == app_module.SEARCH_PARAMS
+        assert tuple(pairs[1:-1]) == service.SEARCH_PARAMS
         assert pairs[-1] == ("page", "0")
 
     def test_url_drops_legacy_params(self, monkeypatch):
@@ -590,7 +591,7 @@ class TestSearchTool:
             seen["url"] = url
             return self.SERP_HTML
 
-        monkeypatch.setattr(app_module, "fetch_page", fake_page)
+        monkeypatch.setattr(service, "fetch_page", fake_page)
         app_module.search("аналитик", page=0)
 
         query = parse_qs(urlsplit(seen["url"]).query)
@@ -606,7 +607,7 @@ class TestSearchTool:
             seen["url"] = url
             return self.SERP_HTML
 
-        monkeypatch.setattr(app_module, "fetch_page", fake_page)
+        monkeypatch.setattr(service, "fetch_page", fake_page)
         app_module.search('аналитик NOT продаж "точный фраз"~5 менедж* (ДМС OR ДМС+)', page=0)
 
         assert parse_qs(urlsplit(seen["url"]).query)["text"] == [
