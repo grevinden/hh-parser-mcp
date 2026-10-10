@@ -62,19 +62,14 @@ def company(id: PositiveInt) -> ToolResult:
 def search(
     text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)],
     page: NonNegativeInt = 0,
-) -> ToolResult:
+) -> list[int]:
     """Search hh.ru vacancies with this server's fixed filters.
 
     Returns the ids of one result page. The query language and the filters are
     documented in the ``hh-mcp://search-guide`` resource — read it before
     building ``text``.
     """
-    ids = search_vacancy_ids(text, page)
-    summary = f"Found: {len(ids)}" if ids else "No results found."
-    return ToolResult(
-        content=[TextContent(type="text", text=summary)],
-        structured_content={"result": ids},
-    )
+    return search_vacancy_ids(text, page)
 
 # --- Resources -------------------------------------------------------------
 
