@@ -9,8 +9,9 @@
 [`search-guide`](src/hh_mcp/search_guide.py) (как составлять поисковый запрос) и
 [`version`](src/hh_mcp/app.py) (какая сборка запущена).
 
-Каждый инструмент возвращает `ToolResult` **только** с `content`: ответ несёт
-данные ровно один раз — без второго `structuredContent` и без UI-копии
+Инструменты объявлены через `@mcp.tool` и возвращают `ToolResult`: `vacancy` и
+`company` — страницу в `content`, `search` — короткую сводку в `content` и список
+id в `structured_content.result`. Дублирующих копий и UI нет
 (см. [`docs/apps_mode.md`](docs/apps_mode.md)).
 
 Запуск — нативный пускатель fastmcp из корня (`uv run fastmcp run` —
@@ -23,8 +24,8 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
 ## Возможности
 
 - **3 текстовых инструмента MCP** — `vacancy`, `company`, `search`.
-  Никакого UI в ответе: данные уходят ровно один раз (проверено на живом
-  сервере — 1.04× к длине текста, `structuredContent` отсутствует).
+  Никакого UI в ответе: страница уходит один раз в `content`, а `search`
+  дополнительно отдаёт список id в `structured_content.result`.
 - **Справочник и метаданные — ресурсами, не тулзами** — `hh-mcp://search-guide`
   (операторы запроса hh.ru: `AND`, `OR`, `NOT`, кавычки, `~`, `*`, `NAME:`,
   `COMPANY_NAME:`, `DESCRIPTION:`) и `hh-mcp://version`. Тулза попадает в схему
@@ -42,13 +43,13 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
 - **Запуск — нативный пускатель fastmcp** (`uv run fastmcp run` / `uv run
   fastmcp dev apps fastmcp.json`) из корня репозитория; транспорты stdio/http/sse.
 - **Никаких зависимостей на UI** — в коде нет импортов UI-библиотек: ответ
-  несёт только `content`.
+  несёт `content` (а `search` — ещё и `structured_content.result`), UI-копий нет.
 - **Файловый кеш ответов** — `ResponseCachingMiddleware` + `FileTreeStore`
   (без Redis) в [`cache/`](src/hh_mcp/cache/disk.py): повторный вызов `vacancy` /
   `company` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
   (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`;
   отключается флагом `HH_MCP_CACHE=0`).
-- **505 тестов** — `uv run pytest tests/ -q` (app, версия, конфиг деплоя,
+- **517 тестов** — `uv run pytest tests/ -q` (app, версия, конфиг деплоя,
   fetch-модуль, guards, html, links, converter, orchestrator, transport,
   config, errors, enrich, кеш).
 
@@ -182,7 +183,7 @@ uv run fastmcp list http://127.0.0.1:8000/mcp
 # Вызов vacancy (типы коэрсятся по схеме автоматически)
 uv run fastmcp call http://127.0.0.1:8000/mcp vacancy id=138156968
 
-# Вызов company, JSON-вывод (content + structuredContent)
+# Вызов company, JSON-вывод (content; structuredContent отсутствует)
 uv run fastmcp call http://127.0.0.1:8000/mcp company id=11620617 --json
 ```
 
@@ -193,23 +194,25 @@ uv run fastmcp call http://127.0.0.1:8000/mcp company id=11620617 --json
 
 ## Инструменты MCP
 
-Все инструменты объявлены как `@mcp.tool` и возвращают `ToolResult` только с
-`content`. Два правила, из-за которых это важно:
+Все инструменты объявлены как `@mcp.tool` и возвращают `ToolResult`. Страницы
+(`vacancy`, `company`) несут текст один раз в `content`; `search` кладёт сводку в
+`content`, а список id — в `structured_content.result`. Два правила, из-за
+которых это важно:
 
-- возврат `-> str` заставил бы fastmcp продублировать текст в
+- возврат `-> str` на странице заставил бы fastmcp продублировать текст в
   `structuredContent.result` (wrap-result) — данные ушли бы в контекст дважды;
 - UI-view (App/Prefab) в `structuredContent` — третья копия, поэтому
   зависимостей на UI в проекте нет.
 
-Замер на живом сервере (`tools/call` по JSON-RPC): длина ответа ÷ длина текста —
-**1.04×** для `vacancy` и `company`, 1.24× для `search` (это JSON-обёртка),
-`structuredContent` отсутствует.
+Аргументы валидирует схема (Pydantic): `PositiveInt`, `NonNegativeInt`,
+`NonBlankStr`. Мусор отсекается на границе MCP, тело тулзы вызывается только с
+валидными значениями.
 
-| Имя | Параметры | Модель получает (`content`) |
-|-----|-----------|----------------------------|
-| `vacancy` | `id: int` (строго положительный) | Markdown страницы вакансии hh.ru (timeout 30 с, макс. 120 000 символов) |
-| `company` | `id: int` (строго положительный) | Markdown страницы компании hh.ru |
-| `search` | `text: str`, `page: int = 0` | «Найдено N вакансий (страница P): …» — список ID |
+| Имя | Параметры | Клиент получает |
+|-----|-----------|-----------------|
+| `vacancy` | `id: PositiveInt` | Markdown вакансии hh.ru в `content` (timeout 30 с, макс. 120 000 символов) |
+| `company` | `id: PositiveInt` | Markdown страницы компании hh.ru в `content` |
+| `search` | `text: NonBlankStr`, `page: NonNegativeInt = 0` | сводка `Found: N` / `No results found.` в `content`; список id в `structured_content.result` |
 
 **Фильтры `search` зафиксированы** (`SEARCH_PARAMS` в `service.py`, ровно те
 параметры, что шлёт сам hh.ru из drawer-фильтра): зарплата 2 раза в месяц,
@@ -400,12 +403,12 @@ Horizon читает [`fastmcp.json`](fastmcp.json) и считает его **�
 uv run pytest tests/ -v
 ```
 
-**505 тестов**, все passed. Покрытие:
-- `test_mcp_app.py` — инструменты, валидация, error mapping, точный набор
-  фильтров `search` и сохранность операторов, контракт «одна копия данных в
-  ответе», отсутствие UI-meta, регистрация и содержимое обоих ресурсов
-  (включая проверку, что `version` — не тулза, а справочник документирует все
-  операторы и все зафиксированные фильтры);
+**517 тестов**, все passed. Покрытие:
+- `test_mcp_app.py` — инструменты, валидация аргументов схемой, error mapping,
+  точный набор фильтров `search` и сохранность операторов, контракт ответа
+  (сводка в `content`, id в `structuredContent.result`), отсутствие UI-meta,
+  регистрация и содержимое обоих ресурсов (включая проверку, что `version` — не
+  тулза, а справочник документирует все операторы и все зафиксированные фильтры);
 - `test_version.py` — версия из `pyproject.toml`, коммит, `BUILD_ID`,
   `runtime_info`;
 - `test_fastmcp_json.py` — конфиг деплоя: транспорт, `log_level` не `DEBUG`,
@@ -415,7 +418,8 @@ uv run pytest tests/ -v
 - `test_caching.py` — файловый кеш: повторный id не дёргает fetch; флаг
   `HH_MCP_CACHE=0`;
 - `test_enrich.py` — обогащение employer-карточки;
-- `test_guards.py` — SSRF-защита (localhost, userinfo, схемы);
+- `test_guards.py` — SSRF-защита (allowlist `hh.ru`, IP-литералы, `localhost`,
+  userinfo, схемы);
 - `test_html.py` — санитайзер, NoisePolicy;
 - `test_links.py` — разрешение относительных ссылок;
 - `test_converter.py` — HTML → Markdown, нормализация (картинки, неразрывные
@@ -475,7 +479,7 @@ guards.py (SSRF) → transport.py (httpx2, HTTP2) → html.py (Sanitizer + Noise
      ↓
 links.py (resolve_relative_links) → converter.py (MarkItDown)
      ↓
-ToolResult{content: данные ровно один раз, без UI-копии}
+ToolResult{content, а у search — ещё structured_content.result}
      ↓
 MCP Client (1.04× к длине текста)
 ```
@@ -515,16 +519,23 @@ uv run fastmcp dev apps fastmcp.json
 
 ### SSRF-защита
 
-`UrlGuard` ([`guards.py`](src/hh_mcp/fetch/guards.py)) отклоняет URL:
-- с схемой, отличной от `http`/`https`;
-- с логином/паролем (userinfo);
-- с hostname, указывающими на локальные адреса (`localhost`, зоны `.local`,
-  `.localhost`).
+`UrlGuard` ([`guards.py`](src/hh_mcp/fetch/guards.py)) пропускает только URL на
+`hh.ru` и его поддомены, а всё прочее отклоняет:
+- любой посторонний домен (`example.com`, `hh.ru.evil.com`) — вне allowlist;
+- схему, отличную от `http`/`https`;
+- логин/пароль (userinfo);
+- локальные адреса (`localhost`, зоны `.local`, `.localhost`) и IP-литералы
+  (`127.0.0.1`, `[::1]`, `169.254.169.254`, десятичные/hex-формы).
 
 ```python
 validate_url("https://localhost/test")    # → SSRError
-validate_url("https://example.com:443")   # → OK
+validate_url("https://example.com:443")   # → SSRError (вне allowlist)
+validate_url("https://kolomna.hh.ru/")    # → OK (поддомен hh.ru)
 ```
+
+Allowlist действует и на входе, и **на каждом хопе редиректа**: транспорт идёт
+за редиректами вручную (`follow_redirects=False`), пропуская каждый `Location`
+через `UrlGuard`, поэтому 302 с `hh.ru` на `localhost` не проходит.
 
 ---
 

@@ -9,9 +9,10 @@
 
 ## Статус: браузерный UI в hh-mcp отключён
 
-Отдельных UI-инструментов нет и не планируется: все четыре тулзы
-(`vacancy`, `company`, `search`, `version`) — обычные текстовые инструменты,
-`@mcp.tool` без `app=`, возвращают `ToolResult` только с `content`.
+Отдельных UI-инструментов нет и не планируется: три тулзы (`vacancy`,
+`company`, `search`) — обычные текстовые инструменты, `@mcp.tool` без `app=`,
+без Prefab-view. `vacancy`/`company` кладут страницу в `content`, `search` —
+сводку в `content`, а список id — в `structured_content.result`.
 
 Причина — удвоение ответа. В режиме приложений страница едет в ответе дважды:
 
@@ -324,14 +325,16 @@ Prefab-хост). Обычный JSON-клиент получит тот же о
 
 ```json
 {
-  "content": [{"type": "text", "text": "Найдено 17 вакансий (страница 0): 138103881, …"}],
+  "content": [{"type": "text", "text": "Found: 17"}],
+  "structuredContent": {"result": [138103881, …]},
   "isError": false
 }
 ```
 
-`structuredContent` отсутствует (`null`) — данных в ответе ровно одна копия,
-см. раздел «Статус» выше. Для `vacancy` / `company` `content[0].text` — это
-Markdown страницы целиком.
+`content` несёт короткую сводку, `structuredContent.result` — список id (одна
+копия), Prefab-view не добавляется, см. раздел «Статус» выше. Для `vacancy` /
+`company` `content[0].text` — это Markdown страницы целиком, а
+`structuredContent` отсутствует.
 
 Раньше сюда добавлялся Prefab-view с теми же данными:
 
