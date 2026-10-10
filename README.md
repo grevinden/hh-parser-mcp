@@ -34,7 +34,7 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
 - **`serverInfo.version`** — сборка видна в handshake (стандартное поле MCP)
   даже без чтения ресурсов, поэтому после деплоя сразу понятно, какой коммит
   разлился. Номер версии поднимается с каждым коммитом
-  (`0.3.2` в [`pyproject.toml`](pyproject.toml)).
+  (`0.4.0` в [`pyproject.toml`](pyproject.toml)).
 - **Fetch-пайплайн SOLID/DIP** — SSRF-защита, HTTP/2-транспорт (httpx2),
   HTML-санитайзер с NoisePolicy, разрешение ссылок, конвертация в Markdown
   (markitdown). Выход после конвертации нормализуется: картинки удаляются, а

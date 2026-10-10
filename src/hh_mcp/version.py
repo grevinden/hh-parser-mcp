@@ -1,11 +1,12 @@
 """Build identity of the running hh-mcp server.
 
-The package version lives in exactly one place — ``[project].version`` in
-``pyproject.toml`` — and is read back through installed distribution metadata,
-so it cannot drift from what was actually built. The short commit is appended
-only when the source tree happens to be a git checkout; a deployed artifact
-carries no ``.git``, so it reports the plain package version and that number
-alone identifies the running build.
+The project version lives in exactly one place — ``[project].version`` in
+``pyproject.toml`` — and is read straight from that file, so it cannot drift
+from what is declared. The application is not built or installed (see
+``[tool.uv] package = false``), so there is no distribution metadata to read.
+The short commit is appended only when the source tree happens to be a git
+checkout; a deployed artifact carries no ``.git``, so it reports the plain
+version and that number alone identifies the running build.
 
 ``serverInfo.version`` in the MCP handshake is the standard place for this
 value, so any client can tell which build it is talking to without asking a
@@ -17,6 +18,7 @@ from __future__ import annotations
 import importlib.metadata
 import subprocess
 import sys
+import tomllib
 from typing import Any
 
 __all__ = [
@@ -32,7 +34,7 @@ __all__ = [
 # --- Configuration ---------------------------------------------------------
 
 DIST_NAME: str = "hh-mcp"
-"""Distribution name to look up in the installed metadata."""
+"""Project name (``[project].name``), the key this file's version lives under."""
 
 UNKNOWN: str = "unknown"
 """Placeholder for a fact that is unavailable in this environment."""
@@ -42,18 +44,23 @@ UNKNOWN: str = "unknown"
 
 
 def package_version() -> str:
-    """Return the installed distribution version.
+    """Return the project version declared in ``pyproject.toml``.
+
+    The application is not built or installed (``[tool.uv] package = false``),
+    so there is no distribution metadata to read; ``[project].version`` in
+    ``pyproject.toml`` is the single source of truth.
 
     Returns
     -------
     str
-        Value of ``[project].version`` in ``pyproject.toml``, or
-        ``"0.0.0+unknown"`` when the package is not installed (running from a
-        source tree without metadata).
+        Value of ``[project].version``, or ``"0.0.0+unknown"`` when the file
+        is missing or unreadable.
     """
     try:
-        return importlib.metadata.version(DIST_NAME)
-    except importlib.metadata.PackageNotFoundError:
+        with open(_pyproject_path(), "rb") as fh:
+            data = tomllib.load(fh)
+        return str(data["project"]["version"])
+    except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError):
         return f"0.0.0+{UNKNOWN}"
 
 
@@ -134,6 +141,18 @@ def _repository_root():
     from pathlib import Path
 
     return Path(__file__).resolve().parents[2]
+
+
+def _pyproject_path():
+    """Return the path to this repository's ``pyproject.toml``.
+
+    Returns
+    -------
+    pathlib.Path
+        ``<repository root>/pyproject.toml``. Not required to exist; a missing
+        file is treated as :data:`UNKNOWN`.
+    """
+    return _repository_root() / "pyproject.toml"
 
 
 BUILD_ID: str = build_id()

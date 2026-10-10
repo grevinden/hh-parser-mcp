@@ -13,9 +13,14 @@ dev = [
     "pytest>=9.1.1",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+# The application is launched by the native fastmcp launcher from the source
+# tree (see fastmcp.json), so it is never built or installed as a distribution.
+# `package = false` keeps uv from building an editable/wheel install and the
+# stray `src/hh_mcp.egg-info`; the source lives on sys.path instead.
+[tool.uv]
+package = false
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/hh_mcp"]
+[tool.pytest.ini_options]
+# The project is not installed, so point pytest at the sources and the repo
+# root (``server`` is imported from the root by test_caching/test_disk_cache_logging).
+pythonpath = ["src", "."]

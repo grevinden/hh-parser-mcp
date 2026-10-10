@@ -7,15 +7,14 @@ value reported as ``serverInfo.version`` cannot drift from what was built.
 
 from __future__ import annotations
 
-import importlib.metadata
 import json
+import tomllib
 
 import pytest
 
 from hh_mcp import version as version_module
 from hh_mcp.version import (
     BUILD_ID,
-    DIST_NAME,
     UNKNOWN,
     build_id,
     package_version,
@@ -25,22 +24,24 @@ from hh_mcp.version import (
 
 
 class TestPackageVersion:
-    """The version comes from installed metadata, not a duplicated constant."""
+    """The version comes from pyproject.toml, the single source of truth."""
 
-    def test_matches_installed_distribution(self):
-        assert package_version() == importlib.metadata.version(DIST_NAME)
+    def test_matches_pyproject(self):
+        with open(version_module._pyproject_path(), "rb") as fh:
+            declared = tomllib.load(fh)["project"]["version"]
+        assert package_version() == declared
 
     def test_follows_pyproject(self):
         """Editing pyproject must move the reported version with it."""
-        installed = importlib.metadata.distribution(DIST_NAME).metadata
-        assert installed is not None
-        assert package_version() == installed["Version"]
+        declared = tomllib.loads(
+            version_module._pyproject_path().read_text(encoding="utf-8")
+        )["project"]["version"]
+        assert package_version() == declared
 
-    def test_missing_distribution_is_not_fatal(self, monkeypatch):
-        def boom(_name):
-            raise importlib.metadata.PackageNotFoundError(_name)
-
-        monkeypatch.setattr(version_module.importlib.metadata, "version", boom)
+    def test_missing_pyproject_is_not_fatal(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            version_module, "_pyproject_path", lambda: tmp_path / "absent.toml"
+        )
         assert package_version() == f"0.0.0+{UNKNOWN}"
 
 

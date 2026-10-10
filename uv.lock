@@ -535,7 +535,7 @@ wheels = [
 [[package]]
 name = "hh-mcp"
 version = "0.4.0"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "fastmcp" },
     { name = "httpx2", extra = ["http2"] },

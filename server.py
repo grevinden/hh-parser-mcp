@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,14 @@ from key_value.aio.stores.filetree import (
     FileTreeV1CollectionSanitizationStrategy,
     FileTreeV1KeySanitizationStrategy,
 )
+
+# The application is run from source and is not installed as a distribution
+# (``[tool.uv] package = false``), so ``src`` is not on the import path. Add it
+# here, before importing the package, so the native launcher works from a plain
+# checkout.
+_SRC = Path(__file__).resolve().parent / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
 from hh_mcp.app import mcp
 
