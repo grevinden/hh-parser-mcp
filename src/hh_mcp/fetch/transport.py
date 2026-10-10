@@ -18,6 +18,7 @@ from .errors import (
     TransportError,
     UnsupportedContentTypeError,
 )
+from .guards import UrlGuard
 
 __all__ = [
     "FetchTransport",
@@ -53,19 +54,21 @@ class HttpxTransport:
         *,
         config: RequestConfig,
         logger: logging.Logger,
+        guard: UrlGuard | None = None,
         client_factory: Callable[..., httpx.Client] | None = None,
     ) -> None:
         """Initialize the transport."""
         self._config = config
         self._logger = logger.getChild("transport")
+        self._guard = guard or UrlGuard()
         self._client_factory = client_factory
 
     def _build_client(self, config: RequestConfig) -> httpx.Client:
         """Build a per-request client from *config*."""
         kwargs: dict[str, object] = {
             "http2": True,
-            "follow_redirects": config.max_redirects > 0,
-            "max_redirects": config.max_redirects,
+            # Redirects are followed by hand so the guard sees every hop.
+            "follow_redirects": False,
             "timeout": config.timeout,
             "limits": httpx.Limits(
                 max_connections=config.max_connections,
@@ -78,15 +81,28 @@ class HttpxTransport:
             return self._client_factory(**kwargs)
         return httpx.Client(**kwargs)  # type: ignore[arg-type]
 
+    def _get_following_redirects(
+        self, client: httpx.Client, target: str, cfg: RequestConfig
+    ) -> httpx.Response:
+        """GET *target*, vetting every redirect hop before it is followed."""
+        for _ in range(cfg.max_redirects + 1):
+            response = client.get(target)
+            location = response.headers.get("location")
+            if cfg.max_redirects <= 0 or not response.is_redirect or not location:
+                return response
+            target = self._guard.validate(str(response.url.join(location)))
+        raise TransportError(f"too many redirects fetching {target}")
+
     def fetch(self, url: str, *, config: RequestConfig | None = None) -> bytes:
         """Fetch *url* and return the raw response body."""
         cfg = config or self._config
-        host = str(httpx.URL(url).host)
+        target = self._guard.validate(url)
+        host = str(httpx.URL(target).host)
         started = time.perf_counter()
 
         with self._build_client(cfg) as client:
             try:
-                response = client.get(url)
+                response = self._get_following_redirects(client, target, cfg)
                 response.raise_for_status()
                 content = response.read()
             except httpx.TimeoutException as exc:

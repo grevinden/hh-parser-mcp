@@ -14,7 +14,7 @@ from hh_mcp.fetch.guards import UrlGuard, validate_url
 
 
 class TestUrlGuardValidate:
-    """Spec §3.3 — SSRF rejection rules (5 rules, case-insensitive host)."""
+    """Only hh.ru and its subdomains pass; everything else is rejected."""
 
     @pytest.fixture
     def guard(self) -> UrlGuard:
@@ -134,35 +134,54 @@ class TestUrlGuardValidate:
     @pytest.mark.parametrize(
         "valid_url",
         [
-            "http://example.com",
-            "https://example.com",
-            "http://example.com:8080/path?q=1",
-            "https://sub.example.com/path/to/page.html",
-            "http://127.0.0.1",  # IP addresses are allowed (no hostname rule for IPs)
-            "https://192.168.1.1:8080/admin",
-            "http://example.com/path#fragment",
-            "https://example.com/path;params?query=value",
+            "http://hh.ru",
+            "https://hh.ru",
+            "http://hh.ru:8080/path?q=1",
+            "https://kolomna.hh.ru/path/to/page.html",
+            "http://hh.ru/path#fragment",
+            "https://hh.ru/path;params?query=value",
         ],
     )
     def test_valid_urls(self, guard: UrlGuard, valid_url) -> None:
         result = guard.validate(valid_url)
         assert isinstance(result, str)
         assert result.startswith("http")
+        assert "hh.ru" in result
+
+    # --- SSRError: hosts outside the allowlist ---
+
+    @pytest.mark.parametrize(
+        "blocked_url",
+        [
+            "http://example.com",
+            "https://hh.ru.evil.com/",
+            "https://evil-hh.ru/",
+            "http://127.0.0.1",
+            "https://192.168.1.1:8080/admin",
+            "http://169.254.169.254/",
+            "http://[::1]/",
+            "http://2130706433/",
+        ],
+    )
+    def test_hosts_outside_the_allowlist(
+        self, guard: UrlGuard, blocked_url
+    ) -> None:
+        with pytest.raises(SSRError, match="allowlist|IP literals"):
+            guard.validate(blocked_url)
 
     def test_normalized_return_value(self, guard: UrlGuard) -> None:
         """UrlGuard returns the httpx2.URL str form (normalized)."""
-        result = guard.validate("HTTP://EXAMPLE.COM:80/path")
-        # httpx2 may normalize scheme/host/case
+        result = guard.validate("HTTP://HH.RU:80/path")
         assert isinstance(result, str)
-        assert "://" in result
+        assert "hh.ru" in result
 
     # --- Edge: malformed but passes httpx2 parse ---
 
     def test_malformed_but_accepted(self, guard: UrlGuard) -> None:
         """Some malformed URLs may still pass httpx2 URL parse – they're accepted."""
-        result = guard.validate("http://example.com/pa th")
+        result = guard.validate("http://hh.ru/pa th")
         assert isinstance(result, str)
-        assert "example.com" in result
+        assert "hh.ru" in result
 
 
 # ---------------------------------------------------------------------------
@@ -171,10 +190,10 @@ class TestUrlGuardValidate:
 
 
 class TestValidateUrlShim:
-    """§8: validate_url must still work as a module-level function."""
+    """validate_url must still work as a module-level function."""
 
     def test_valid(self) -> None:
-        validate_url("https://example.com")
+        validate_url("https://hh.ru")
 
     def test_rejects_ssrf(self) -> None:
         with pytest.raises(SSRError):

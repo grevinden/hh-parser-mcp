@@ -119,24 +119,24 @@ class TestFetchServiceFetchPage:
 
     def test_success(self) -> None:
         svc = _make_service(_ok_handler)
-        result = svc.fetch_page("https://example.com")
+        result = svc.fetch_page("https://hh.ru")
         assert isinstance(result, bytes)
         assert b"Hello" in result
 
     def test_404_raises_transport_error(self) -> None:
         svc = _make_service(_404_handler)
         with pytest.raises(TransportError):
-            svc.fetch_page("https://example.com")
+            svc.fetch_page("https://hh.ru")
 
     def test_timeout_raises_fetch_timeout_error(self) -> None:
         svc = _make_service(_timeout_handler)
         with pytest.raises(FetchTimeoutError):
-            svc.fetch_page("https://example.com")
+            svc.fetch_page("https://hh.ru")
 
     def test_too_large_raises(self) -> None:
         svc = _make_service(_too_large_handler)
         with pytest.raises(ResponseTooLargeError):
-            svc.fetch_page("https://example.com")
+            svc.fetch_page("https://hh.ru")
 
     def test_ssrf_rejection(self) -> None:
         svc = _make_service()
@@ -151,7 +151,7 @@ class TestFetchServiceFetchPage:
     def test_timeout_override(self) -> None:
         """Timeout override is clamped and applied."""
         svc = _make_service(_ok_handler)
-        result = svc.fetch_page("https://example.com", timeout=5.0)
+        result = svc.fetch_page("https://hh.ru", timeout=5.0)
         assert isinstance(result, bytes)
         assert b"Hello" in result
 
@@ -162,33 +162,33 @@ class TestFetchServiceFetchAsMarkdown:
     def test_success_with_title(self) -> None:
         """Title from <title> tag is prefixed as # Title."""
         svc = _make_service(_ok_handler, FakeConverter())
-        result = svc.fetch_as_markdown("https://example.com")
+        result = svc.fetch_as_markdown("https://hh.ru")
         assert "# Test" in result
         assert "Hello" in result
 
     def test_no_title(self) -> None:
         svc = _make_service(_no_title_handler, FakeConverter())
-        result = svc.fetch_as_markdown("https://example.com")
+        result = svc.fetch_as_markdown("https://hh.ru")
         # No title prefix
         assert result.startswith("<html>") or result.startswith("<body>") or result.startswith("No title")
 
     def test_title_from_converter_fallback(self) -> None:
         """When sanitizer has no title, the converter's title is used."""
         svc = _make_service(_no_title_handler, FakeConverterWithTitle())
-        result = svc.fetch_as_markdown("https://example.com")
+        result = svc.fetch_as_markdown("https://hh.ru")
         assert "# FromConverter" in result
 
     def test_truncation(self) -> None:
         """Result is truncated at max_chars (budget includes the suffix)."""
         suffix = "\n\n...truncated..."
         svc = _make_service(_ok_handler, FakeConverter())
-        result = svc.fetch_as_markdown("https://example.com", max_chars=20)
+        result = svc.fetch_as_markdown("https://hh.ru", max_chars=20)
         assert len(result) <= 20 + len(suffix)
         assert "...truncated..." in result
 
     def test_no_truncation_for_short_content(self) -> None:
         svc = _make_service(_ok_handler, FakeConverter())
-        result = svc.fetch_as_markdown("https://example.com", max_chars=100000)
+        result = svc.fetch_as_markdown("https://hh.ru", max_chars=100000)
         assert "...truncated..." not in result
 
     def test_invalid_utf8_body(self) -> None:
@@ -197,7 +197,7 @@ class TestFetchServiceFetchAsMarkdown:
             return httpx.Response(200, content=b"\xff\xfe\x00\x01", request=request)
         svc = _make_service(handler, FakeConverter())
         with pytest.raises(ParseError):
-            svc.fetch_as_markdown("https://example.com")
+            svc.fetch_as_markdown("https://hh.ru")
 
     def test_no_images_in_vacancy_output(self) -> None:
         """A full fetch of an hh.ru-shaped page carries no picture.
@@ -280,7 +280,7 @@ class TestFetchServiceExecuteH1Dedup:
         """Vacancy case: H1 'X' under og:title 'Вакансия X в Y, ...'."""
         handler = _h1_handler("Вакансия Дженералист в Компании, работа в компании Компании", "Дженералист")
         svc = _make_h1_service(handler)
-        result = svc.fetch_as_markdown("https://example.com")
+        result = svc.fetch_as_markdown("https://hh.ru")
         lines = [l for l in result.splitlines() if l.startswith("# ")]
         assert lines == ["# Дженералист"]
         assert "Hello" in result
@@ -288,21 +288,21 @@ class TestFetchServiceExecuteH1Dedup:
     def test_identical_h1_and_title_not_duplicated(self) -> None:
         handler = _h1_handler("Testing QA Engineer", "Testing QA Engineer")
         svc = _make_h1_service(handler)
-        result = svc.fetch_as_markdown("https://example.com")
+        result = svc.fetch_as_markdown("https://hh.ru")
         lines = [l for l in result.splitlines() if l.startswith("# ")]
         assert lines == ["# Testing QA Engineer"]
 
     def test_case_insensitive_overlap_is_deduped(self) -> None:
         handler = _h1_handler("Вакансия Backend Engineer", "backend engineer")
         svc = _make_h1_service(handler)
-        result = svc.fetch_as_markdown("https://example.com")
+        result = svc.fetch_as_markdown("https://hh.ru")
         lines = [l for l in result.splitlines() if l.startswith("# ")]
         assert lines == ["# backend engineer"]
 
     def test_non_overlapping_h1_gets_prefix(self) -> None:
         handler = _h1_handler("Вакансия Backend Engineer в ООО", "ООО Концерн")
         svc = _make_h1_service(handler)
-        result = svc.fetch_as_markdown("https://example.com")
+        result = svc.fetch_as_markdown("https://hh.ru")
         lines = [l for l in result.splitlines() if l.startswith("# ")]
         assert len(lines) == 2
         assert lines[0] == "# Вакансия Backend Engineer в ООО"
@@ -312,7 +312,7 @@ class TestFetchServiceExecuteH1Dedup:
         """A too-short H1 never counts as an overlap (no false positive)."""
         handler = _h1_handler("AB", "AB Company")
         svc = _make_h1_service(handler)
-        result = svc.fetch_as_markdown("https://example.com")
+        result = svc.fetch_as_markdown("https://hh.ru")
         lines = [l for l in result.splitlines() if l.startswith("# ")]
         assert len(lines) == 2
         assert lines[0] == "# AB"
@@ -566,7 +566,7 @@ class TestFetchAsMarkdownPublic:
             client_factory=lambda **kw: httpx.Client(**kw, transport=mock),
         )
         result = fetch_as_markdown(
-            "https://example.com",
+            "https://hh.ru",
             config=cfg,
             transport=transport,
             converter=FakeConverter(),
@@ -585,7 +585,7 @@ class TestFetchAsMarkdownPublic:
             client_factory=lambda **kw: httpx.Client(**kw, transport=mock),
         )
         result = fetch_as_markdown(
-            "https://example.com",
+            "https://hh.ru",
             timeout=10,
             max_chars=500,
             config=cfg,
@@ -624,7 +624,7 @@ class TestFetchPagePublic:
             client_factory=lambda **kw: httpx.Client(**kw, transport=mock),
         )
         result = fetch_page(
-            "https://example.com",
+            "https://hh.ru",
             config=cfg,
             transport=transport,
             logger=LOGGER,
@@ -641,7 +641,7 @@ class TestFetchPagePublic:
             client_factory=lambda **kw: httpx.Client(**kw, transport=mock),
         )
         result = fetch_page(
-            "https://example.com",
+            "https://hh.ru",
             timeout=30.0,
             config=cfg,
             transport=transport,

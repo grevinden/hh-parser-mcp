@@ -12,6 +12,7 @@ from hh_mcp.fetch.errors import (
     FetchTimeoutError,
     HttpStatusError,
     ResponseTooLargeError,
+    SSRError,
     TransportError,
     UnsupportedContentTypeError,
 )
@@ -51,6 +52,24 @@ def _handler_non_html(request: httpx.Request) -> httpx.Response:
     )
 
 
+def _handler_redirect_to_localhost(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        302,
+        headers={"location": "http://localhost:9999/steal"},
+        request=request,
+    )
+
+
+def _handler_redirect_to_allowed(request: httpx.Request) -> httpx.Response:
+    if request.url.path == "/moved":
+        return httpx.Response(
+            302,
+            headers={"location": "https://hh.ru/final"},
+            request=request,
+        )
+    return httpx.Response(200, text="<html>final</html>", request=request)
+
+
 class TestFetchTransportProtocol:
     """Verify that HttpxTransport satisfies FetchTransport Protocol."""
 
@@ -87,14 +106,14 @@ class TestHttpxTransport:
 
     def test_successful_fetch(self) -> None:
         transport = self._make_mocked_transport(_handler_200)
-        result = transport.fetch("https://example.com")
+        result = transport.fetch("https://hh.ru")
         assert isinstance(result, bytes)
         assert b"OK" in result
 
     def test_404_raises_transport_error(self) -> None:
         transport = self._make_mocked_transport(_handler_404)
         with pytest.raises(TransportError) as exc_info:
-            transport.fetch("https://example.com")
+            transport.fetch("https://hh.ru")
         assert "404" in str(exc_info.value)
         assert isinstance(exc_info.value.__cause__, httpx.HTTPStatusError)
 
@@ -102,22 +121,22 @@ class TestHttpxTransport:
         """The caller explains a 404 without parsing the httpx message."""
         transport = self._make_mocked_transport(_handler_404)
         with pytest.raises(HttpStatusError) as exc_info:
-            transport.fetch("https://example.com")
+            transport.fetch("https://hh.ru")
         err = exc_info.value
         assert err.status_code == 404
-        assert err.url == "https://example.com"
-        assert err.host == "example.com"
+        assert err.url == "https://hh.ru"
+        assert err.host == "hh.ru"
 
     def test_timeout_raises_fetch_timeout_error(self) -> None:
         transport = self._make_mocked_transport(_handler_timeout)
         with pytest.raises(FetchTimeoutError) as exc_info:
-            transport.fetch("https://example.com")
+            transport.fetch("https://hh.ru")
         assert isinstance(exc_info.value.__cause__, httpx.TimeoutException)
 
     def test_response_too_large(self) -> None:
         transport = self._make_mocked_transport(_handler_too_large)
         with pytest.raises(ResponseTooLargeError) as exc_info:
-            transport.fetch("https://example.com")
+            transport.fetch("https://hh.ru")
         assert "4194304" in str(exc_info.value)
 
     def test_non_html_with_strict_mode(self) -> None:
@@ -140,13 +159,13 @@ class TestHttpxTransport:
             client_factory=lambda **kw: httpx.Client(**kw, transport=mock),
         )
         with pytest.raises(UnsupportedContentTypeError):
-            transport.fetch("https://example.com")
+            transport.fetch("https://hh.ru")
 
     def test_non_html_without_strict_mode(self) -> None:
         """Content-type mismatch logs warning but does not raise when strict is off."""
         transport = self._make_mocked_transport(_handler_non_html)
         # Should not raise
-        result = transport.fetch("https://example.com")
+        result = transport.fetch("https://hh.ru")
         assert b"json" in result
 
     def test_per_request_config_override(self) -> None:
@@ -159,14 +178,36 @@ class TestHttpxTransport:
         )
         # Override with different timeout
         override_cfg = RequestConfig(timeout=10.0)
-        result = transport.fetch("https://example.com", config=override_cfg)
+        result = transport.fetch("https://hh.ru", config=override_cfg)
         assert b"OK" in result
 
     def test_per_request_config_none(self) -> None:
         """When config=None, the default config is used."""
         transport = self._make_mocked_transport(_handler_200)
-        result = transport.fetch("https://example.com", config=None)
+        result = transport.fetch("https://hh.ru", config=None)
         assert b"OK" in result
+
+    def test_redirect_to_blocked_host_is_rejected(self) -> None:
+        """A public host must not bounce the request to a private address."""
+        transport = self._make_mocked_transport(_handler_redirect_to_localhost)
+        with pytest.raises(SSRError):
+            transport.fetch("https://hh.ru")
+
+    def test_redirect_within_the_allowlist_is_followed(self) -> None:
+        transport = self._make_mocked_transport(_handler_redirect_to_allowed)
+        result = transport.fetch("https://hh.ru/moved")
+        assert b"final" in result
+
+    def test_redirect_loop_stops(self) -> None:
+        """Every hop is counted; a self-redirect does not spin forever."""
+        def _self_redirect(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                302, headers={"location": "/loop"}, request=request
+            )
+
+        transport = self._make_mocked_transport(_self_redirect)
+        with pytest.raises(TransportError, match="too many redirects"):
+            transport.fetch("https://hh.ru/loop")
 
 
 class TestFactories:
