@@ -25,6 +25,7 @@ __all__ = [
     "MarkItDownConverter",
     "default_converter",
     "normalize_markdown",
+    "normalize_spaces",
     "strip_images",
 ]
 
@@ -57,6 +58,17 @@ _RAW_IMG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
 #: An anchor with an empty label ``[](url)`` — the shape an image-only link
 #: (``[![alt](pic)](target)``) collapses into once the picture is removed.
 _EMPTY_LINK_RE = re.compile(r"\[\s*\]\([^)]*\)")
+
+#: Unicode space characters that are not the ASCII space (``U+0020``) but
+#: occupy the same slot.  hh.ru leans on them heavily: ``NO-BREAK SPACE``
+#: (``U+00A0``, written ``&nbsp;`` in the markup) appears throughout every
+#: description — a single vacancy carries ~55 — and ``NARROW NO-BREAK SPACE``
+#: (``U+202F``) separates an amount from its unit in salary strings
+#: ("100 000 ₽ за месяц").  The converter passes them through verbatim; left
+#: in place they defeat plain-text search, line wrapping and copy-paste, so
+#: every one is folded to a regular space.  ``U+2007`` (FIGURE SPACE) is the
+#: same no-break family.
+_NO_BREAK_SPACE_RE = re.compile(r"[\u00a0\u2007\u202f]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,10 +213,35 @@ def strip_images(markdown: str) -> str:
     return _EMPTY_LINK_RE.sub("", out)
 
 
+def normalize_spaces(text: str) -> str:
+    """Fold Unicode no-break spaces in *text* to a regular ASCII space.
+
+    The characters folded are ``U+00A0`` (NO-BREAK SPACE, hh.ru's ``&nbsp;``),
+    ``U+202F`` (NARROW NO-BREAK SPACE, used in salary strings) and ``U+2007``
+    (FIGURE SPACE).  They look like a space in a plain-text reader but are not
+    one, so they break word search, line wrapping and copy-paste; the output
+    carries ASCII spaces only.
+
+    The function is pure and idempotent; it never raises.
+
+    Args:
+        text:
+            Markdown or plain text.
+
+    Returns:
+        str
+            *text* with every no-break space replaced by a regular space.
+    """
+    if not text:
+        return text
+    return _NO_BREAK_SPACE_RE.sub(" ", text)
+
+
 def normalize_markdown(markdown: str) -> str:
     """Post-process converted Markdown before it is returned to the caller.
 
     - Remove every image (:func:`strip_images`).
+    - Fold Unicode no-break spaces to regular spaces (:func:`normalize_spaces`).
     - Collapse runs of 3+ consecutive newlines into a single blank line
       (``\\n\\n``).
     - Rewrite bare CommonMark autolinks ``<https://...>`` into explicit
@@ -225,6 +262,7 @@ def normalize_markdown(markdown: str) -> str:
     # Images first: a removed picture may leave a blank line behind, which
     # the blank-line collapse then folds away.
     markdown = strip_images(markdown)
+    markdown = normalize_spaces(markdown)
     markdown = _BLANK_LINES_RE.sub("\\n\\n", markdown).strip()
     return _ANGLED_URL_RE.sub(r"[\1](\1)", markdown)
 

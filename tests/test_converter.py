@@ -12,6 +12,7 @@ from hh_mcp.fetch.converter import (
     MarkdownResult,
     default_converter,
     normalize_markdown,
+    normalize_spaces,
     strip_images,
 )
 
@@ -230,6 +231,56 @@ class TestNormalizeMarkdown:
     def test_images_removed_with_idempotence(self) -> None:
         once = normalize_markdown("![a](https://hhcdn.ru/a.png)\n\ntext")
         assert normalize_markdown(once) == once
+
+    def test_folds_no_break_spaces(self) -> None:
+        """hh.ru ``&nbsp;`` survives conversion but not normalization."""
+        assert normalize_markdown("АО\u00a0«Просторы»\u00a0— лидер") == "АО «Просторы» — лидер"
+
+    def test_folds_no_break_spaces_in_salary(self) -> None:
+        assert normalize_markdown("от\u00a0100\u00a0000\u00a0₽\u202fза\u00a0месяц") == "от 100 000 ₽ за месяц"
+
+    def test_no_break_space_normalization_idempotent(self) -> None:
+        once = normalize_markdown("Мы\u00a0ищем\u202fинженера")
+        assert normalize_markdown(once) == once
+
+
+class TestNormalizeSpaces:
+    """normalize_spaces - the output-level "ASCII spaces only" guarantee."""
+
+    def test_empty(self) -> None:
+        assert normalize_spaces("") == ""
+
+    def test_plain_text_untouched(self) -> None:
+        text = "Обычный текст со пробелами и\nпереводом строки."
+        assert normalize_spaces(text) == text
+
+    def test_ascii_space_untouched(self) -> None:
+        assert normalize_spaces("a b") == "a b"
+
+    def test_no_break_space(self) -> None:
+        assert normalize_spaces("АО\u00a0Агрохолдинг") == "АО Агрохолдинг"
+
+    def test_narrow_no_break_space(self) -> None:
+        assert normalize_spaces("₽\u202fза месяц") == "₽ за месяц"
+
+    def test_figure_space(self) -> None:
+        assert normalize_spaces("9\u2007000") == "9 000"
+
+    def test_salary_line(self) -> None:
+        assert normalize_spaces("от\u00a0100\u00a0000\u00a0₽") == "от 100 000 ₽"
+
+    def test_no_no_break_space_remains(self) -> None:
+        for char in ("\u00a0", "\u202f", "\u2007"):
+            assert char not in normalize_spaces(f"a{char}b")
+
+    def test_idempotent(self) -> None:
+        once = normalize_spaces("Мы\u00a0и\u202fони")
+        assert normalize_spaces(once) == once
+
+    def test_pure(self) -> None:
+        md = "АО\u00a0Агрохолдинг"
+        normalize_spaces(md)
+        assert md == "АО\u00a0Агрохолдинг"
 
 
 class TestStripImages:

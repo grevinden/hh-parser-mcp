@@ -34,10 +34,12 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
 - **`serverInfo.version`** — сборка видна в handshake (стандартное поле MCP)
   даже без чтения ресурсов, поэтому после деплоя сразу понятно, какой коммит
   разлился. Номер версии поднимается с каждым коммитом
-  (`0.2.0` в [`pyproject.toml`](pyproject.toml)).
+  (`0.3.2` в [`pyproject.toml`](pyproject.toml)).
 - **Fetch-пайплайн SOLID/DIP** — SSRF-защита, HTTP/2-транспорт (httpx2),
   HTML-санитайзер с NoisePolicy, разрешение ссылок, конвертация в Markdown
-  (markitdown). Иерархия исключений — [`errors.py`](src/hh_mcp/fetch/errors.py).
+  (markitdown). Выход после конвертации нормализуется: картинки удаляются, а
+  неразрывные пробелы (`U+00A0`, `U+202F`, `U+2007`) сворачиваются в обычный.
+  Иерархия исключений — [`errors.py`](src/hh_mcp/fetch/errors.py).
 - **Запуск — нативный пускатель fastmcp** (`uv run fastmcp run` / `uv run
   fastmcp dev apps fastmcp.json`) из корня репозитория; транспорты stdio/http/sse.
 - **Никаких зависимостей на UI** — `prefab-ui` и экстра `fastmcp[apps]`
@@ -47,7 +49,7 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
   `company` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
   (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`;
   отключается флагом `HH_MCP_CACHE=0`).
-- **531 тест** — `uv run pytest tests/ -v` (app, версия, конфиг деплоя,
+- **618 тестов** — `uv run pytest tests/ -v` (app, версия, конфиг деплоя,
   семантический индекс, fetch-модуль, guards, html, links, converter,
   orchestrator, transport, config, errors, enrich, caching).
 
@@ -248,8 +250,8 @@ URI ресурса назван в описании тулзы `search` — ин
 стандартном поле `serverInfo.version` ответа `initialize` — его читает любой
 MCP-клиент. Ресурс `hh-mcp://version` даёт то же плюс детали. Версия живёт в
 `[project].version` (`pyproject.toml`) и поднимается с каждым коммитом; локально
-`BUILD_ID` выглядит как `0.3.1+dbee48e` (версия + короткий коммит), на деплое —
-просто `0.2.0`, потому что `.git` в артефакте нет.
+`BUILD_ID` выглядит как `0.3.2+a1b2c3d` (версия + короткий коммит), на деплое —
+просто `0.3.2`, потому что `.git` в артефакте нет.
 
 **Валидация**: `id <= 0` → `ToolError("Invalid ID: …")` до HTTP-запроса.
 **Ошибки fetch** маппятся в `ToolError` (см. `_tool_error()` в
@@ -524,7 +526,7 @@ Horizon читает [`fastmcp.json`](fastmcp.json) и считает его **�
 uv run pytest tests/ -v
 ```
 
-**531 тест**, все passed. Покрытие:
+**618 тестов**, все passed. Покрытие:
 - `test_mcp_app.py` — инструменты, валидация, error mapping, точный набор
   фильтров `search` и сохранность операторов, контракт «одна копия данных в
   ответе», отсутствие UI-meta, регистрация и содержимое обоих ресурсов
@@ -548,7 +550,8 @@ uv run pytest tests/ -v
 - `test_guards.py` — SSRF-защита (localhost, userinfo, схемы);
 - `test_html.py` — санитайзер, NoisePolicy;
 - `test_links.py` — разрешение относительных ссылок;
-- `test_converter.py` — HTML → Markdown;
+- `test_converter.py` — HTML → Markdown, нормализация (картинки, неразрывные
+  пробелы);
 - `test_orchestrator.py` — fetch-пайплайн целиком;
 - `test_transport.py` — HTTP-транспорт (httpx2);
 - `test_config.py` — RequestConfig / NoisePolicy;

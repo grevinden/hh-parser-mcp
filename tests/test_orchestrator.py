@@ -386,6 +386,24 @@ class TestFetchServiceHtmlToMarkdown:
         assert "До" in result
         assert "После" in result
 
+    def test_no_break_spaces_in_output(self) -> None:
+        """End-to-end: ``&nbsp;``-heavy markup yields ASCII spaces only.
+
+        Runs the real converter, so the whole chain (Sanitizer ->
+        markitdown -> normalize) is verified on the Markdown an agent
+        actually receives: hh.ru's ``&nbsp;`` and narrow no-break space
+        never reach the output.
+        """
+        svc = _make_service(converter=default_converter(LOGGER))
+        result = svc.html_to_markdown(
+            "<main><p>АО&nbsp;«Просторы»&nbsp;— лидер в&nbsp;России.</p>"
+            "<p>от&nbsp;100&nbsp;000&nbsp;₽ за&nbsp;месяц</p></main>"
+        )
+        assert "\u00a0" not in result
+        assert "\u202f" not in result
+        assert "АО «Просторы» — лидер в России." in result
+        assert "от 100 000 ₽ за месяц" in result
+
 
 # ---------------------------
 # Vacancy enrichment
