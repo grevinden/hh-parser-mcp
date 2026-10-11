@@ -1,8 +1,8 @@
 """Tests for the hh-mcp tools (vacancy, company, search, version).
 
-Covers error mapping, argument validation, and the response contract: page
-tools return Markdown in ``content``; ``search`` returns a short summary in
-``content`` plus the vacancy ids in ``structuredContent.result``.
+Covers error mapping, argument validation, and the response contract: each tool
+returns its natural type (``str`` for the pages, ``list[int]`` for ``search``)
+and fastmcp builds the envelope — ``content`` plus ``structuredContent.result``.
 
 Uses the in-memory ``FastMCPTransport`` client (no network, no HTTP server).
 ``fetch_as_markdown`` is always monkeypatched — the real fetch is covered
@@ -12,6 +12,7 @@ by ``tests/test_orchestrator.py``.
 from __future__ import annotations
 
 import asyncio
+import json
 from urllib.parse import parse_qs, parse_qsl, urlsplit
 
 import pytest
@@ -233,16 +234,11 @@ class TestToolValidation:
 
         monkeypatch.setattr(service, "fetch_as_markdown", fake)
 
-        # Text only: the payload must not be mirrored into a UI copy.
-        result = vacancy(38185674)
+        assert vacancy(38185674).startswith("markdown")
         assert seen["url"] == "https://hh.ru/vacancy/38185674"
-        assert result.content[0].text.startswith("markdown")
-        assert result.structured_content is None
 
-        result = company(9410116)
+        assert company(9410116).startswith("markdown")
         assert seen["url"] == "https://hh.ru/employer/9410116"
-        assert result.content[0].text.startswith("markdown")
-        assert result.structured_content is None
 
 
 # --- In-memory client over FastMCPTransport ---------------------------------
@@ -327,13 +323,14 @@ class TestMcpTools:
 # --- Response contract: the payload travels once ----------------------------
 
 
-class TestSingleCopyResponse:
-    """Nothing in the tool result repeats the payload.
+class TestToolResponseShape:
+    """What a client actually receives for each tool.
 
-    Two mechanisms used to double it: a ``-> str`` return, which fastmcp
-    mirrors into ``structuredContent.result``, and a Prefab view, which embeds
-    the same text for the browser. A client walking twenty vacancy IDs would
-    then pay for forty pages, so both are gone and this pins that down.
+    Each tool returns its natural type and fastmcp builds the envelope: the
+    value goes to ``content`` and is mirrored into ``structuredContent.result``.
+    For ``search`` (``list[int]``) the mirror is negligible; for the page tools
+    (``str``) it doubles the page — the accepted price of the plain-return style
+    that keeps all three tools uniform.
     """
 
     MARKER = "PAGEMARKER"
@@ -365,16 +362,24 @@ class TestSingleCopyResponse:
 
         assert not [u for u in asyncio.run(_run()) if u.startswith("ui://")]
 
-    def test_page_tool_ships_one_copy(self, monkeypatch):
+    def test_page_tool_returns_the_markdown(self, monkeypatch):
         monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch(self.MARKER))
-        result = vacancy(38185674)
-        assert result.model_dump_json().count(self.MARKER) == 1
+        assert self.MARKER in vacancy(38185674)
 
-    def test_search_ships_one_copy(self, monkeypatch):
+    def test_page_tool_mirrors_the_page(self, monkeypatch):
+        """``-> str`` mirrors the page into ``structuredContent.result`` — the
+        doubling the plain-return style accepts in exchange for uniformity."""
+        monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch(self.MARKER))
+        result = _call("vacancy", {"id": 38185674})
+        assert self.MARKER in result.content[0].text
+        assert self.MARKER in json.dumps(result.structured_content)
+
+    def test_search_ids_reach_the_model(self, monkeypatch):
         html = b'<div data-qa="serp-item__title" href="/vacancy/111"></div>'
         monkeypatch.setattr(service, "fetch_page", lambda url, **kw: html)
-        result = app_module.search("DevOps", page=0)
-        assert result.model_dump_json().count("111") == 1
+        result = _call("search", {"text": "DevOps", "page": 0})
+        assert json.loads(result.content[0].text) == [111]
+        assert result.structured_content == {"result": [111]}
 
     def test_handshake_reports_build(self):
         """serverInfo.version is where any MCP client reads the build from."""
@@ -526,11 +531,11 @@ class TestEmptyPageGuard:
 
     def test_real_page_passes(self, monkeypatch):
         monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch("# Page\n" + "x" * 500))
-        assert "Page" in vacancy(138156968).content[0].text
+        assert "Page" in vacancy(138156968)
 
 
 class TestSearchTool:
-    """search() returns a one-line summary plus the vacancy ids, once."""
+    """search() returns the vacancy ids of one result page."""
 
     SERP_HTML = (
         b'<div data-qa="serp-item__title" href="/vacancy/111"></div>'
@@ -547,13 +552,17 @@ class TestSearchTool:
         return app_module.search("Программист 1С", page=1)
 
     def test_returns_ids_to_model(self, monkeypatch):
-        result = self._run(monkeypatch)
-        assert result.content[0].text == "Found: 2"
-        assert result.structured_content == {"result": [111, 222]}
+        assert self._run(monkeypatch) == [111, 222]
 
     def test_ids_travel_in_structured_content(self, monkeypatch):
-        result = self._run(monkeypatch)
+        """Over the wire the ids ride in ``structuredContent.result`` and, as
+        JSON text, in ``content`` — so any client sees them."""
+        monkeypatch.setattr(
+            service, "fetch_page", lambda url, **kwargs: self.SERP_HTML
+        )
+        result = _call("search", {"text": "1С", "page": 1})
         assert result.structured_content == {"result": [111, 222]}
+        assert json.loads(result.content[0].text) == [111, 222]
 
     def test_page_goes_to_query(self, monkeypatch):
         seen: dict[str, str] = {}
@@ -615,29 +624,9 @@ class TestSearchTool:
             'аналитик NOT продаж "точный фраз"~5 менедж* (ДМС OR ДМС+)'
         ]
 
-    def test_each_id_appears_once(self, monkeypatch):
-        """Every ID occurs in the result exactly once — text only, no table."""
-        result = self._run(monkeypatch)
-        payload = result.model_dump_json()
-        assert payload.count("111") == 1
-        assert payload.count("222") == 1
-
     def test_beyond_last_page_is_empty(self, monkeypatch):
-        result = self._run(monkeypatch, html=b"<html></html>")
-        assert result.content[0].text == "No results found."
-        assert result.structured_content == {"result": []}
-
-    def test_empty_result_is_stated_plainly(self, monkeypatch):
-        """The message says there were no matches, and does not guess why."""
-        result = self._run(monkeypatch, html=b"<html></html>")
-        assert result.content[0].text == "No results found."
-
-    def test_empty_result_does_not_guess_the_cause(self, monkeypatch):
-        """The server knows what filters it sent, not why hh.ru returned
-        nothing. It must not offer the agent a menu of explanations."""
-        text = self._run(monkeypatch, html=b"<html></html>").content[0].text
-        assert "возможных причин" not in text.lower()
-        assert "отсеял" not in text.lower()
+        """No matches is an empty list — the shape the schema promises."""
+        assert self._run(monkeypatch, html=b"<html></html>") == []
 
     @pytest.mark.parametrize(("text", "page"), [
         ("", 0),

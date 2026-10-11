@@ -6,8 +6,6 @@ import json
 from typing import Annotated
 
 from fastmcp import FastMCP
-from fastmcp.tools import ToolResult
-from mcp.types import TextContent
 from pydantic import NonNegativeInt, PositiveInt, StringConstraints
 
 from hh_mcp.search_guide import SEARCH_GUIDE_MD, SEARCH_GUIDE_URI
@@ -39,28 +37,24 @@ NonBlankStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length
 
 
 @mcp.tool
-def vacancy(id: PositiveInt) -> ToolResult:
+def vacancy(id: PositiveInt) -> str:
     """Fetch an hh.ru vacancy page as Markdown."""
-    md = fetch_page_markdown(
+    return fetch_page_markdown(
         f"https://hh.ru/vacancy/{id}", doc_type="vacancy", doc_id=id
     )
 
-    return ToolResult(content=md)
-
 
 @mcp.tool
-def company(id: PositiveInt) -> ToolResult:
+def company(id: PositiveInt) -> str:
     """Fetch an hh.ru company (employer) page as Markdown."""
-    md = fetch_page_markdown(
+    return fetch_page_markdown(
         f"https://hh.ru/employer/{id}", doc_type="employer", doc_id=id
     )
-
-    return ToolResult(content=md)
 
 
 @mcp.tool
 def search(
-    text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)],
+    text: NonBlankStr,
     page: NonNegativeInt = 0,
 ) -> list[int]:
     """Search hh.ru vacancies with this server's fixed filters.
