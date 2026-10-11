@@ -1,6 +1,6 @@
 # Project Documentation Rules (Non-Obvious Only)
 
-- «Документация» = корневой `AGENTS.md` (стек, команды, жёсткие правила) + `README.md` (вход в проект) + `docs/`: `apps_mode.md` (почему браузерный UI отключён и как его вернуть), `fetch_redesign.md`, `plan_mcp_app.md` (исторический план FastMCP Apps). Рабочие планы в `.gigacode/plans/`: `nimble-wolf` (перенос Go `webfetch` — причина sync-пайплайна `fetch/`), `jolly-comet` (whitelist `convert` для markitdown — `MARKDOWN_CONVERT_TAGS`).
+- «Документация» = корневой `AGENTS.md` (стек, команды, жёсткие правила) + `README.md` (вход в проект) + `docs/`: `apps_mode.md` (почему браузерный UI отключён и как его вернуть), `fetch_redesign.md`. Рабочие планы в `.gigacode/plans/`: `nimble-wolf` (перенос Go `webfetch` — причина sync-пайплайна `fetch/`), `jolly-comet` (whitelist `convert` для markitdown — `MARKDOWN_CONVERT_TAGS`).
 - Канонический источник FastMCP 4.x API — code-indexer (MCP-сервер `cix`) → `github.com/PrefectHQ/fastmcp@main` (main = 4.x; онлайн-доки 2.x-эпохи устарели).
 - `hh-mcp` = HeadHunter: «HH API» в проекте нет — только fetch страниц hh.ru в Markdown через `fetch/`-пайплайн (SSRF-гвардия → `httpx2` → HTML-санитайзер → `markitdown` + whitelist тегов → enrich карты работодателя).
 - Три «нельзя-путать»: `httpx2` — Pydantic-форк httpx (классического `httpx` в стеке нет); `search` — GET-список ID вакансий с hh.ru (не семантический поиск по нашему индексу); Upstash Search — второй уровень кеша (не векторное хранилище для прямого запроса, `read_page` split-страницу не отдаёт).
