@@ -11,27 +11,29 @@
 
 Отдельных UI-инструментов нет и не планируется: три тулзы (`vacancy`,
 `company`, `search`) — обычные текстовые инструменты, `@mcp.tool` без `app=`,
-без Prefab-view. `vacancy`/`company` кладут страницу в `content`, `search` —
-сводку в `content`, а список id — в `structured_content.result`.
+без Prefab-view. Каждая возвращает свой естественный тип (`str` у страниц,
+`list[int]` у `search`), а конверт `content` + `structuredContent.result` строит
+fastmcp.
 
-Причина — удвоение ответа. В режиме приложений страница едет в ответе дважды:
-
-| Что | Откуда | Во сколько раз ответ тяжелее текста |
-|---|---|---|
-| `content` | текст для модели | 1× |
-| `structuredContent.view` | тот же текст в Prefab-компоненте для браузера | +100 % |
-
+Причина отказа от UI — удвоение ответа: в режиме приложений страница ехала и в
+`content`, и в `structuredContent.view` (тот же текст для браузера), это +100 %.
 Замер на живом сервере до перехода (`tools/call` по JSON-RPC, длина ответа ÷
 длина текста): `vacancy` — 2.10×, `company` — 2.17×, `search` — 4.41×. Клиент,
-который обходит 20 ID вакансий, получал 40 страниц текста вместо 20. Сейчас
-те же тулзы дают 1.04× (накладные — JSON-обёртка ответа).
+который обходил 20 ID вакансий, получал 40 страниц текста вместо 20.
+
+Prefab-view в проекте нет до сих пор. Но fastmcp и без него зеркалит возврат
+тулзы в `structuredContent.result` (wrap-result), поэтому страницы по-прежнему
+идут ~2×: замер сейчас — 2.08× у `vacancy` и 2.11× у `company`. Зеркало
+убирается только ручным `ToolResult(content=…)` — от него отказались ради единой
+простой формы всех трёх тулз (см. AGENTS.md).
 
 Что пришлось учесть при выборе:
 
 - **`-> str` дублирует сам по себе.** Возврат строки fastmcp схлопывает в
   `structuredContent.result`: текст оказывается в ответе дважды, даже без
-  Prefab. Отсюда правило: возвращать `ToolResult(content=…)`. Проверено — с
-  `ToolResult` в `structuredContent` приходит `null`.
+  Prefab. Проверено: с `ToolResult(content=…)` в `structuredContent` приходит
+  `null` — ручной `ToolResult` зеркало убирает, но от него отказались ради единой
+  формы (см. AGENTS.md).
 - **Отрендерить без `view` нельзя.** Рендерер рисует только
   `structuredContent.view` и больше ничего (`prefab_ui/renderer/app.html`),
   поэтому без view браузер показывает вечный спиннер «Waiting for content…».
@@ -50,9 +52,9 @@
   осталось ни одного импорта `prefab_ui`.
 
 Вернуть UI можно, если приоритетом станет браузер: вернуть `@mcp.tool(app=…)`
-и `structured_content`, но тогда двойной размер ответа возвращается — лучше
-сразу с ленивым view. Регрессии на «одну копию» лежат в
-`tests/test_mcp_app.py::TestSingleCopyResponse`.
+и Prefab-view в `structured_content`, но тогда к уже имеющемуся зеркалу
+добавится третья копия. Форма ответа тулз закреплена в
+`tests/test_mcp_app.py::TestToolResponseShape`.
 
 ---
 
@@ -325,16 +327,17 @@ Prefab-хост). Обычный JSON-клиент получит тот же о
 
 ```json
 {
-  "content": [{"type": "text", "text": "Found: 17"}],
-  "structuredContent": {"result": [138103881, …]},
+  "content": [{"type": "text", "text": "[138103881,138103882,…]"}],
+  "structuredContent": {"result": [138103881, 138103882, …]},
   "isError": false
 }
 ```
 
-`content` несёт короткую сводку, `structuredContent.result` — список id (одна
-копия), Prefab-view не добавляется, см. раздел «Статус» выше. Для `vacancy` /
-`company` `content[0].text` — это Markdown страницы целиком, а
-`structuredContent` отсутствует.
+fastmcp строит конверт сам из возвращённого `list[int]`: те же id едут и в
+`content` (JSON-текстом), и в `structuredContent.result`. Prefab-view не
+добавляется, см. раздел «Статус» выше. Для `vacancy` / `company` `content[0].text`
+— это Markdown страницы целиком, и он же зеркалится в `structuredContent.result`
+(отсюда ~2× на провод).
 
 Раньше сюда добавлялся Prefab-view с теми же данными:
 
@@ -384,10 +387,10 @@ Prefab-хост). Обычный JSON-клиент получит тот же о
 tools/call vacancy {id}  ──►  fetch_as_markdown(hh.ru/vacancy/{id})
                                      │
                                      ▼
-                       ToolResult{content: Markdown,      ──►  модели
-                                   structured_content: view}
+                       return Markdown  ──────────────────►  content + зеркало
+                                                                 в structuredContent
 
-Браузер (Apps UI):
+Браузер (Apps UI — в hh-mcp отключён, см. «Статус»):
 пользователь → пикер → форма из inputSchema → POST /api/launch
               → GET /launch → хост вызывает ту же тулзу с теми же аргументами
               → structuredContent.view рисуется рендерером Prefab

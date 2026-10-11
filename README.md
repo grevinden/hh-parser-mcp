@@ -9,9 +9,9 @@
 [`search-guide`](src/hh_mcp/search_guide.py) (как составлять поисковый запрос) и
 [`version`](src/hh_mcp/app.py) (какая сборка запущена).
 
-Инструменты объявлены через `@mcp.tool` и возвращают `ToolResult`: `vacancy` и
-`company` — страницу в `content`, `search` — короткую сводку в `content` и список
-id в `structured_content.result`. Дублирующих копий и UI нет
+Инструменты объявлены через `@mcp.tool` и возвращают **естественный тип**: `str`
+для `vacancy`/`company` (Markdown страницы) и `list[int]` для `search` (id одной
+страницы). Конверт — `content` + `structuredContent.result` — строит fastmcp
 (см. [`docs/apps_mode.md`](docs/apps_mode.md)).
 
 Запуск — нативный пускатель fastmcp из корня (`uv run fastmcp run` —
@@ -24,8 +24,8 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
 ## Возможности
 
 - **3 текстовых инструмента MCP** — `vacancy`, `company`, `search`.
-  Никакого UI в ответе: страница уходит один раз в `content`, а `search`
-  дополнительно отдаёт список id в `structured_content.result`.
+  Никакого UI в ответе: каждая тулза возвращает свой тип, а fastmcp строит
+  конверт `content` + `structuredContent.result`.
 - **Справочник и метаданные — ресурсами, не тулзами** — `hh-mcp://search-guide`
   (операторы запроса hh.ru: `AND`, `OR`, `NOT`, кавычки, `~`, `*`, `NAME:`,
   `COMPANY_NAME:`, `DESCRIPTION:`) и `hh-mcp://version`. Тулза попадает в схему
@@ -43,13 +43,13 @@ MCP-сервер; `uv run fastmcp dev apps fastmcp.json` — MCP + браузе�
 - **Запуск — нативный пускатель fastmcp** (`uv run fastmcp run` / `uv run
   fastmcp dev apps fastmcp.json`) из корня репозитория; транспорты stdio/http/sse.
 - **Никаких зависимостей на UI** — в коде нет импортов UI-библиотек: ответ
-  несёт `content` (а `search` — ещё и `structured_content.result`), UI-копий нет.
+  строит fastmcp из типа тулзы, Prefab-view не добавляется.
 - **Файловый кеш ответов** — `ResponseCachingMiddleware` + `FileTreeStore`
   (без Redis) в [`cache/`](src/hh_mcp/cache/disk.py): повторный вызов `vacancy` /
   `company` с тем же id отдаётся из кеша и **не читает hh.ru повторно**
   (TTL 1 час; каталог `~/.cache/hh-mcp`, переопределяется `HH_MCP_CACHE_DIR`;
   отключается флагом `HH_MCP_CACHE=0`).
-- **517 тестов** — `uv run pytest tests/ -q` (app, версия, конфиг деплоя,
+- **515 тестов** — `uv run pytest tests/ -q` (app, версия, конфиг деплоя,
   fetch-модуль, guards, html, links, converter, orchestrator, transport,
   config, errors, enrich, кеш).
 
@@ -183,7 +183,7 @@ uv run fastmcp list http://127.0.0.1:8000/mcp
 # Вызов vacancy (типы коэрсятся по схеме автоматически)
 uv run fastmcp call http://127.0.0.1:8000/mcp vacancy id=138156968
 
-# Вызов company, JSON-вывод (content; structuredContent отсутствует)
+# Вызов company, JSON-вывод (content + зеркало в structuredContent.result)
 uv run fastmcp call http://127.0.0.1:8000/mcp company id=11620617 --json
 ```
 
@@ -194,25 +194,26 @@ uv run fastmcp call http://127.0.0.1:8000/mcp company id=11620617 --json
 
 ## Инструменты MCP
 
-Все инструменты объявлены как `@mcp.tool` и возвращают `ToolResult`. Страницы
-(`vacancy`, `company`) несут текст один раз в `content`; `search` кладёт сводку в
-`content`, а список id — в `structured_content.result`. Два правила, из-за
-которых это важно:
+Все инструменты объявлены как `@mcp.tool` и возвращают естественный тип; конверт
+строит fastmcp — значение попадает в `content` и зеркалится в
+`structuredContent.result` (wrap-result). Для `search` (`list[int]`) зеркало
+копеечное, для страниц (`str`) — удваивает ответ: замер на живом сервере даёт
+**2.08×** для `vacancy` и **2.11×** для `company`. Это осознанная плата за единую
+простую форму всех трёх тулз.
 
-- возврат `-> str` на странице заставил бы fastmcp продублировать текст в
-  `structuredContent.result` (wrap-result) — данные ушли бы в контекст дважды;
-- UI-view (App/Prefab) в `structuredContent` — третья копия, поэтому
+- собирать `ToolResult` руками не нужно — тип в сигнатуре уже описывает форму;
+- UI-view (App/Prefab) в `structuredContent` дал бы третью копию, поэтому
   зависимостей на UI в проекте нет.
 
 Аргументы валидирует схема (Pydantic): `PositiveInt`, `NonNegativeInt`,
 `NonBlankStr`. Мусор отсекается на границе MCP, тело тулзы вызывается только с
 валидными значениями.
 
-| Имя | Параметры | Клиент получает |
-|-----|-----------|-----------------|
-| `vacancy` | `id: PositiveInt` | Markdown вакансии hh.ru в `content` (timeout 30 с, макс. 120 000 символов) |
-| `company` | `id: PositiveInt` | Markdown страницы компании hh.ru в `content` |
-| `search` | `text: NonBlankStr`, `page: NonNegativeInt = 0` | сводка `Found: N` / `No results found.` в `content`; список id в `structured_content.result` |
+| Имя | Параметры | Возвращает | Клиент получает |
+|-----|-----------|-----------|-----------------|
+| `vacancy` | `id: PositiveInt` | `str` | Markdown вакансии в `content` + зеркало в `structuredContent.result` (timeout 30 с, макс. 120 000 символов) |
+| `company` | `id: PositiveInt` | `str` | Markdown страницы компании — так же |
+| `search` | `text: NonBlankStr`, `page: NonNegativeInt = 0` | `list[int]` | JSON-массив id в `content` (`[111,222]`) + `structuredContent.result`; пустая выдача — `[]` |
 
 **Фильтры `search` зафиксированы** (`SEARCH_PARAMS` в `service.py`, ровно те
 параметры, что шлёт сам hh.ru из drawer-фильтра): зарплата 2 раза в месяц,
@@ -403,12 +404,13 @@ Horizon читает [`fastmcp.json`](fastmcp.json) и считает его **�
 uv run pytest tests/ -v
 ```
 
-**517 тестов**, все passed. Покрытие:
+**515 тестов**, все passed. Покрытие:
 - `test_mcp_app.py` — инструменты, валидация аргументов схемой, error mapping,
-  точный набор фильтров `search` и сохранность операторов, контракт ответа
-  (сводка в `content`, id в `structuredContent.result`), отсутствие UI-meta,
-  регистрация и содержимое обоих ресурсов (включая проверку, что `version` — не
-  тулза, а справочник документирует все операторы и все зафиксированные фильтры);
+  точный набор фильтров `search` и сохранность операторов, форма ответа
+  (естественный тип → `content` + зеркало в `structuredContent.result`),
+  отсутствие UI-meta, регистрация и содержимое обоих ресурсов (включая проверку,
+  что `version` — не тулза, а справочник документирует все операторы и все
+  зафиксированные фильтры);
 - `test_version.py` — версия из `pyproject.toml`, коммит, `BUILD_ID`,
   `runtime_info`;
 - `test_fastmcp_json.py` — конфиг деплоя: транспорт, `log_level` не `DEBUG`,
@@ -470,7 +472,7 @@ AGENTS.md               конвенции для агентов
 ```
 MCP Client / LLM → FastMCP (streamable HTTP / stdio)
      ↓
-Tool fn (vacancy / company / search)  → ToolResult{content}
+Tool fn (vacancy / company → str; search → list[int])
 Resource fn (search-guide / version) → str
      ↓
 fetch_as_markdown(url, timeout=30, max_chars=120_000)
@@ -479,9 +481,9 @@ guards.py (SSRF) → transport.py (httpx2, HTTP2) → html.py (Sanitizer + Noise
      ↓
 links.py (resolve_relative_links) → converter.py (MarkItDown)
      ↓
-ToolResult{content, а у search — ещё structured_content.result}
+fastmcp envelope: content + structuredContent.result (wrap-result)
      ↓
-MCP Client (1.04× к длине текста)
+MCP Client (search — копейки; страницы — 2.1× к длине текста)
 ```
 
 ### Dev-режим (нативный `fastmcp dev apps fastmcp.json`)
