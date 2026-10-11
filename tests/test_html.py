@@ -256,6 +256,32 @@ class TestSanitizer:
         # The nested markup is normalised to a flat span.
         assert "<div>Москва</div>" not in result.html
 
+    def test_fact_cell_line_break_kept(self, sanitizer: Sanitizer) -> None:
+        """A ``<br>`` inside a fact cell becomes a line break, not a drop.
+
+        The cell buffer otherwise collapses whitespace; hh.ru splits a value
+        across ``<br>``, so the break must survive as a newline.
+        """
+        html = (
+            "<main>"
+            '<div data-qa="cell-text">'
+            '<span data-qa="cell-text-content">Первое<br>Второе</span>'
+            "</div>"
+            "</main>"
+        )
+        result = sanitizer.sanitize(html)
+        assert "Первое\nВторое" in result.html
+
+    def test_fact_cell_self_closing_break_kept(self, sanitizer: Sanitizer) -> None:
+        """A self-closing ``<br/>`` inside a fact cell also becomes a newline."""
+        html = (
+            "<main>"
+            '<span data-qa="cell-text-content">А<br/>Б</span>'
+            "</main>"
+        )
+        result = sanitizer.sanitize(html)
+        assert "А\nБ" in result.html
+
     # --- Main-block extraction (default noise policy) ---
 
     def test_main_extraction_keeps_only_main(self, sanitizer: Sanitizer) -> None:

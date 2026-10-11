@@ -404,6 +404,16 @@ class TestFetchServiceHtmlToMarkdown:
         assert "АО «Просторы» — лидер в России." in result
         assert "от 100 000 ₽ за месяц" in result
 
+    def test_fact_cell_line_break_in_output(self) -> None:
+        """End-to-end: a ``<br>`` inside a fact cell reaches the Markdown as
+        a newline (Sanitizer keeps the break, markitdown renders it)."""
+        svc = _make_service(converter=default_converter(LOGGER))
+        result = svc.html_to_markdown(
+            '<main><span data-qa="cell-text-content">'
+            "Первое<br>Второе</span></main>"
+        )
+        assert "Первое\nВторое" in result
+
 
 # ---------------------------
 # Vacancy enrichment

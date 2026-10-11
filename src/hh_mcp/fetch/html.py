@@ -57,6 +57,11 @@ class _ReconstructingHtmlParser(HTMLParser):
         }
     )
 
+    #: Marks a ``<br>`` inside a buffered fact cell.  A real NUL cannot occur
+    #: in HTML text, so the marker survives the whitespace collapse and is
+    #: turned back into a line break when the cell is flushed.
+    _BREAK = "\x00"
+
     def __init__(self, noise: NoisePolicy) -> None:
         super().__init__(convert_charrefs=False)
         self._noise = noise
@@ -133,6 +138,10 @@ class _ReconstructingHtmlParser(HTMLParser):
         if self._cell_depth:
             if tag_lower not in self._VOID_ELEMENTS:
                 self._cell_depth += 1
+            elif tag_lower == "br":
+                # A line break inside a cell must not be dropped: hh.ru
+                # splits a value across ``<br>`` (e.g. the description).
+                self._cell_parts.append(self._BREAK)
             return
         if tag_lower == "span" and dict(attrs).get("data-qa") == FACT_CELL_QA:
             self._cell_depth = 1
@@ -234,6 +243,13 @@ class _ReconstructingHtmlParser(HTMLParser):
         if self._literal_tag is not None:
             return
 
+        if self._cell_depth:
+            # Self-closing tags inside a buffered cell are consumed by the
+            # buffer; a ``<br/>`` still becomes a line break.
+            if tag_lower == "br":
+                self._cell_parts.append(self._BREAK)
+            return
+
         if tag_lower in self.LITERAL_ELEMENTS or tag_lower == "title":
             self._removed_count += 1
             return
@@ -281,7 +297,11 @@ class _ReconstructingHtmlParser(HTMLParser):
     def _flush_fact_cell(self) -> None:
         """Emit (or drop) the buffered ``cell-text-content`` span."""
         raw = "".join(self._cell_parts)
-        text = " ".join(unescape(raw).split())
+        chunks = [
+            " ".join(unescape(chunk).split())
+            for chunk in raw.split(self._BREAK)
+        ]
+        text = "\n".join(chunks).strip()
         if not text:
             return
         if text.casefold() in ORPHAN_FACT_LABELS:
