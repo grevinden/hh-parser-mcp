@@ -91,7 +91,7 @@ search comes back empty, drop conditions one at a time:
 1. Read this resource.
 2. Compose `text`: plain words plus at most the operators the request needs.
 3. `search(text=..., page=0)` — it returns IDs only, about 20 per page.
-4. Read the promising ones with `vacancy(id)`; read an employer with `company(id)`.
+4. Read the promising ones with `vacancy(idn)`; read an employer with `company(idn)`.
 5. For more results, `search(text=..., page=1)` and onwards.
 
 Source: <https://hh.ru/blog/lajfhaki-hh-bystryj-poisk-vakansij>

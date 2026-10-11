@@ -37,18 +37,18 @@ NonBlankStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length
 
 
 @mcp.tool
-def vacancy(id: PositiveInt) -> str:
+def vacancy(idn: PositiveInt) -> str:
     """Fetch an hh.ru vacancy page as Markdown."""
     return fetch_page_markdown(
-        f"https://hh.ru/vacancy/{id}", doc_type="vacancy", doc_id=id
+        f"https://hh.ru/vacancy/{idn}", doc_type="vacancy", doc_id=idn
     )
 
 
 @mcp.tool
-def company(id: PositiveInt) -> str:
+def company(idn: PositiveInt) -> str:
     """Fetch an hh.ru company (employer) page as Markdown."""
     return fetch_page_markdown(
-        f"https://hh.ru/employer/{id}", doc_type="employer", doc_id=id
+        f"https://hh.ru/employer/{idn}", doc_type="employer", doc_id=idn
     )
 
 

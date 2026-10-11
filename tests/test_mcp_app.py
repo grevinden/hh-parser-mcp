@@ -212,11 +212,11 @@ class TestToolValidation:
     @pytest.mark.parametrize(
         ("tool", "args"),
         [
-            ("vacancy", {"id": 0}),
-            ("vacancy", {"id": -1}),
-            ("company", {"id": 0}),
-            ("company", {"id": -1}),
-            ("vacancy", {"id": "abc"}),
+            ("vacancy", {"idn": 0}),
+            ("vacancy", {"idn": -1}),
+            ("company", {"idn": 0}),
+            ("company", {"idn": -1}),
+            ("vacancy", {"idn": "abc"}),
             ("vacancy", {}),
         ],
     )
@@ -263,25 +263,25 @@ class TestMcpTools:
     )
     def test_success(self, monkeypatch, tool, id_, url_frag):
         monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch("# Page"))
-        result = _call(tool, {"id": id_})
+        result = _call(tool, {"idn": id_})
         assert result.is_error is False
         assert url_frag in result.content[0].text
 
     def test_invalid_id_zero(self, monkeypatch):
         monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch())
-        result = _call("vacancy", {"id": 0})
+        result = _call("vacancy", {"idn": 0})
         assert result.is_error is True
         assert "id" in result.content[0].text.lower()
 
     def test_invalid_id_negative(self, monkeypatch):
         monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch())
-        result = _call("company", {"id": -1})
+        result = _call("company", {"idn": -1})
         assert result.is_error is True
         assert "id" in result.content[0].text.lower()
 
     def test_ssre(self, monkeypatch):
         monkeypatch.setattr(service, "fetch_as_markdown", _raising_fetch(SSRError()))
-        result = _call("vacancy", {"id": 123})
+        result = _call("vacancy", {"idn": 123})
         assert result.is_error is True
         assert "SSRF guard rejected the URL" in result.content[0].text
 
@@ -291,7 +291,7 @@ class TestMcpTools:
             "fetch_as_markdown",
             _raising_fetch(FetchTimeoutError("timed out")),
         )
-        result = _call("vacancy", {"id": 123})
+        result = _call("vacancy", {"idn": 123})
         assert result.is_error is True
         assert "Timeout after 30s" in result.content[0].text
 
@@ -301,7 +301,7 @@ class TestMcpTools:
             "fetch_as_markdown",
             _raising_fetch(TransportError("connection refused")),
         )
-        result = _call("vacancy", {"id": 123})
+        result = _call("vacancy", {"idn": 123})
         assert result.is_error is True
         assert "Transport error: connection refused" in result.content[0].text
 
@@ -311,7 +311,7 @@ class TestMcpTools:
             "fetch_as_markdown",
             _raising_fetch(ResponseTooLargeError("5 MiB > 4 MiB cap")),
         )
-        result = _call("vacancy", {"id": 123})
+        result = _call("vacancy", {"idn": 123})
         assert result.is_error is True
         assert "Response too large > 120000" in result.content[0].text
 
@@ -370,7 +370,7 @@ class TestToolResponseShape:
         """``-> str`` mirrors the page into ``structuredContent.result`` — the
         doubling the plain-return style accepts in exchange for uniformity."""
         monkeypatch.setattr(service, "fetch_as_markdown", _fake_fetch(self.MARKER))
-        result = _call("vacancy", {"id": 38185674})
+        result = _call("vacancy", {"idn": 38185674})
         assert self.MARKER in result.content[0].text
         assert self.MARKER in json.dumps(result.structured_content)
 

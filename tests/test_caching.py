@@ -84,9 +84,9 @@ class TestResponseCaching:
         monkeypatch.setattr(service, "fetch_as_markdown", _counting_fetch(calls))
         server = _build_server(tmp_path / "cache")
 
-        first = _call_tool(server, "vacancy", {"id": 138156968})
-        second = _call_tool(server, "vacancy", {"id": 138156968})
-        other = _call_tool(server, "vacancy", {"id": 137911901})
+        first = _call_tool(server, "vacancy", {"idn": 138156968})
+        second = _call_tool(server, "vacancy", {"idn": 138156968})
+        other = _call_tool(server, "vacancy", {"idn": 137911901})
 
         assert first.is_error is False
         assert second.is_error is False
@@ -103,8 +103,8 @@ class TestResponseCaching:
         monkeypatch.setattr(service, "fetch_as_markdown", _counting_fetch(calls))
         server = _build_server(tmp_path / "cache")
 
-        first = _call_tool(server, "company", {"id": 9410116})
-        second = _call_tool(server, "company", {"id": 9410116})
+        first = _call_tool(server, "company", {"idn": 9410116})
+        second = _call_tool(server, "company", {"idn": 9410116})
 
         assert first.is_error is False
         assert second.is_error is False
@@ -118,8 +118,8 @@ class TestResponseCaching:
         monkeypatch.setattr(service, "fetch_as_markdown", _counting_fetch(calls))
         server = _build_server(tmp_path / "cache", included_tools=["vacancy"])
 
-        first = _call_tool(server, "company", {"id": 9410116})
-        second = _call_tool(server, "company", {"id": 9410116})
+        first = _call_tool(server, "company", {"idn": 9410116})
+        second = _call_tool(server, "company", {"idn": 9410116})
 
         assert first.is_error is False
         assert second.is_error is False
@@ -135,10 +135,10 @@ class TestResponseCaching:
         monkeypatch.setattr(service, "fetch_as_markdown", _counting_fetch(calls))
 
         server1 = _build_server(tmp_path / "cache")
-        first = _call_tool(server1, "vacancy", {"id": 138156968})
+        first = _call_tool(server1, "vacancy", {"idn": 138156968})
 
         server2 = _build_server(tmp_path / "cache")
-        second = _call_tool(server2, "vacancy", {"id": 138156968})
+        second = _call_tool(server2, "vacancy", {"idn": 138156968})
 
         assert calls == ["https://hh.ru/vacancy/138156968"]
         assert first.content[0].text == second.content[0].text

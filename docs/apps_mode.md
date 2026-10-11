@@ -143,8 +143,8 @@ backend-тулзы (форма с кнопкой, CRUD, мастер) — для
 
 | Инструмент | Параметры | Результат |
 |---|---|---|
-| `vacancy(id)` | `{"id": integer}` — обязательный | Markdown страницы hh.ru |
-| `company(id)` | `{"id": integer}` — обязательный | Markdown страницы компании |
+| `vacancy(idn)` | `{"idn": integer}` — обязательный | Markdown страницы hh.ru |
+| `company(idn)` | `{"idn": integer}` — обязательный | Markdown страницы компании |
 | `search(text, page)` | `{"text": string}` — обязательный, `page: int = 0` | `list[int]` — ID вакансий |
 
 Отдельных `@app.ui()`-входов нет: раньше были `vacancy_app` / `employer_app` /
@@ -164,7 +164,7 @@ def vacancy_app() -> Column:              # 1. Модель открывает �
                 "Получить вакансию",
                 on_click=CallTool(
                     tool="vacancy",                    # 3. Кнопка → vacancy
-                    arguments={"id": "{{ vacancy_id }}"},  # 4. id берётся из поля
+                    arguments={"idn": "{{ vacancy_id }}"},  # 4. id берётся из поля
                     on_success=ShowToast("Готово", variant="success"),
                     on_error=ShowToast("Ошибка", variant="error"),
                 ),
@@ -177,8 +177,8 @@ def vacancy_app() -> Column:              # 1. Модель открывает �
 
 | Инструмент | Схема параметров (`inputSchema`) |
 |---|---|
-| `vacancy` | `{"id": {"type": "integer"}}` — обязательный |
-| `company` | `{"id": {"type": "integer"}}` — обязательный |
+| `vacancy` | `{"idn": {"type": "integer"}}` — обязательный |
+| `company` | `{"idn": {"type": "integer"}}` — обязательный |
 | `search` | `{"text": {"type": "string"}, "page": {"type": "integer", "default": 0}}` |
 
 Это те же схемы, из которых пикер строит браузерную форму, — дублей нет.
@@ -198,7 +198,7 @@ def vacancy_app() -> Column:              # 1. Модель открывает �
   "method": "tools/call",
   "params": {
     "name": "vacancy",
-    "arguments": {"id": 138156968}
+    "arguments": {"idn": 138156968}
   }
 }
 ```
@@ -209,11 +209,11 @@ def vacancy_app() -> Column:              # 1. Модель открывает �
 
 1. `Input(name="vacancy_id")` кладёт значение поля в состояние интерфейса под
    ключом `vacancy_id`.
-2. В `arguments` кнопки написано `{"id": "{{ vacancy_id }}"}` — это **шаблонная
+2. В `arguments` кнопки написано `{"idn": "{{ vacancy_id }}"}` — это **шаблонная
    подстановка** (interpolation): перед вызовом `{{ vacancy_id }}` заменяется
    текущим значением поля.
 3. `CallTool` отправляет на сервер ровно тот же
-   `tools/call` `{"name": "vacancy", "arguments": {"id": …}}`, что и в 3.1.
+   `tools/call` `{"name": "vacancy", "arguments": {"idn": …}}`, что и в 3.1.
 
 То есть UI — это удобная обёртка над тем же самым JSON-RPC-вызовом.
 
@@ -223,7 +223,7 @@ def vacancy_app() -> Column:              # 1. Модель открывает �
 через `POST /api/launch` с теми же именем тулзы и аргументами, что и в 3.1.
 Ручная подстановка `{{ поле }}` нужна только в самописной `@app.ui()`-панели:
 там `Input(name="vacancy_id")` кладёт значение в состояние, а в
-`arguments` написано `{"id": "{{ vacancy_id }}"}` — шаблонная подстановка перед
+`arguments` написано `{"idn": "{{ vacancy_id }}"}` — шаблонная подстановка перед
 вызовом.
 
 ---
@@ -286,7 +286,7 @@ POST /mcp
 
 ```json
 {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
- "params": {"name": "vacancy", "arguments": {"id": 138156968}}}
+ "params": {"name": "vacancy", "arguments": {"idn": 138156968}}}
 ```
 
 Ответ — `isError: false` и Markdown страницы. Поиск:
@@ -317,8 +317,8 @@ Prefab-хост). Обычный JSON-клиент получит тот же о
 
 | Нужно | Инструмент | Аргументы |
 |---|---|---|
-| Получить Markdown вакансии | `vacancy` | `{"id": int}` |
-| Получить Markdown компании | `company` | `{"id": int}` |
+| Получить Markdown вакансии | `vacancy` | `{"idn": int}` |
+| Получить Markdown компании | `company` | `{"idn": int}` |
 | Найти ID вакансий | `search` | `{"text": str, "page": int}` |
 
 ### 5.6. Формат ответа

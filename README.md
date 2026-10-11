@@ -181,10 +181,10 @@ Dev-режим — нативный (`uv run fastmcp dev apps fastmcp.json`): MC
 uv run fastmcp list http://127.0.0.1:8000/mcp
 
 # Вызов vacancy (типы коэрсятся по схеме автоматически)
-uv run fastmcp call http://127.0.0.1:8000/mcp vacancy id=138156968
+uv run fastmcp call http://127.0.0.1:8000/mcp vacancy idn=138156968
 
 # Вызов company, JSON-вывод (content + зеркало в structuredContent.result)
-uv run fastmcp call http://127.0.0.1:8000/mcp company id=11620617 --json
+uv run fastmcp call http://127.0.0.1:8000/mcp company idn=11620617 --json
 ```
 
 Более низкоуровневый вариант — прямой JSON-RPC запрос к `/mcp`
@@ -211,8 +211,8 @@ uv run fastmcp call http://127.0.0.1:8000/mcp company id=11620617 --json
 
 | Имя | Параметры | Возвращает | Клиент получает |
 |-----|-----------|-----------|-----------------|
-| `vacancy` | `id: PositiveInt` | `str` | Markdown вакансии в `content` + зеркало в `structuredContent.result` (timeout 30 с, макс. 120 000 символов) |
-| `company` | `id: PositiveInt` | `str` | Markdown страницы компании — так же |
+| `vacancy` | `idn: PositiveInt` | `str` | Markdown вакансии в `content` + зеркало в `structuredContent.result` (timeout 30 с, макс. 120 000 символов) |
+| `company` | `idn: PositiveInt` | `str` | Markdown страницы компании — так же |
 | `search` | `text: NonBlankStr`, `page: NonNegativeInt = 0` | `list[int]` | JSON-массив id в `content` (`[111,222]`) + `structuredContent.result`; пустая выдача — `[]` |
 
 **Фильтры `search` зафиксированы** (`SEARCH_PARAMS` в `service.py`, ровно те
