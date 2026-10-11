@@ -390,6 +390,6 @@ MARKDOWN_CONVERT_TAGS: frozenset[str] = frozenset(
         "strong", "b", "em", "i", "code", "pre",
         "a",
         "table", "thead", "tbody", "tr", "th", "td",
-        "article", "section", "main", "hgroup",
+        "article", "section", "main", "hgroup", "div",
     }
 )

@@ -146,6 +146,17 @@ class TestMarkItDownConverter:
         assert "* Item 1" in result.markdown
         assert "| H1 |" in result.markdown
 
+    def test_convert_div_is_block_boundary(self, converter: MarkItDownConverter) -> None:
+        """``div`` is whitelisted, so sibling ``<div>``s separate.
+
+        Without it markitdown glues the block boundaries ("ПервоеВторое") —
+        the symptom seen on hh.ru's employer/vacancy fact cards, whose
+        facts are plain sibling ``<div>``s.
+        """
+        html = "<main><div>Первое</div><div>Второе</div></main>"
+        result = converter.convert(html, base_url=None)
+        assert "Первое\n\nВторое" in result.markdown
+
     def test_convert_does_not_emit_images(self, converter: MarkItDownConverter) -> None:
         """``img`` is absent from the whitelist, so no picture is emitted.
 
